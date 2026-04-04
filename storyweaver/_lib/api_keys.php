@@ -88,27 +88,40 @@ function api_keys_for_user(string $user_id): array
  */
 function api_key_create(array $params): array
 {
-    $keys = api_keys_read();
+    $path = api_keys_path();
+    $lock_path = $path . '.lock';
 
-    $record = [
-        'id'             => generate_id('key_'),
-        'owner_user_id'  => $params['owner_user_id'] ?? '',
-        'label'          => $params['label'] ?? 'Untitled Key',
-        'provider'       => $params['provider'] ?? 'openai',
-        'base_url'       => rtrim($params['base_url'] ?? '', '/'),
-        'api_key'        => $params['api_key'] ?? '',
-        'model_text'     => $params['model_text'] ?? '',
-        'model_image'    => $params['model_image'] ?? '',
-        'scope'          => $params['scope'] ?? 'self',
-        'status'         => 'active',
-        'last_failure'   => null,
-        'shared_by'      => $params['owner_user_id'] ?? '',
-    ];
+    $lock = fopen($lock_path, 'c');
+    if (!$lock || !flock($lock, LOCK_EX)) {
+        throw new RuntimeException('Could not acquire lock for api_keys');
+    }
 
-    $keys[] = $record;
-    api_keys_write($keys);
+    try {
+        $keys = api_keys_read();
 
-    return $record;
+        $record = [
+            'id'             => generate_id('key_'),
+            'owner_user_id'  => $params['owner_user_id'] ?? '',
+            'label'          => $params['label'] ?? 'Untitled Key',
+            'provider'       => $params['provider'] ?? 'openai',
+            'base_url'       => rtrim($params['base_url'] ?? '', '/'),
+            'api_key'        => $params['api_key'] ?? '',
+            'model_text'     => $params['model_text'] ?? '',
+            'model_image'    => $params['model_image'] ?? '',
+            'scope'          => $params['scope'] ?? 'self',
+            'status'         => 'active',
+            'last_failure'   => null,
+            'shared_by'      => $params['owner_user_id'] ?? '',
+        ];
+
+        $keys[] = $record;
+        api_keys_write($keys);
+
+        return $record;
+    } finally {
+        flock($lock, LOCK_UN);
+        fclose($lock);
+    }
 }
 
 /**
@@ -164,18 +177,31 @@ function api_key_update(string $id, array $fields): bool
  */
 function api_key_delete(string $id): bool
 {
-    $keys = api_keys_read();
-    $initial = count($keys);
+    $path = api_keys_path();
+    $lock_path = $path . '.lock';
 
-    $keys = array_values(array_filter($keys, function ($k) use ($id) {
-        return ($k['id'] ?? '') !== $id;
-    }));
-
-    if (count($keys) < $initial) {
-        api_keys_write($keys);
-        return true;
+    $lock = fopen($lock_path, 'c');
+    if (!$lock || !flock($lock, LOCK_EX)) {
+        return false;
     }
-    return false;
+
+    try {
+        $keys = api_keys_read();
+        $initial = count($keys);
+
+        $keys = array_values(array_filter($keys, function ($k) use ($id) {
+            return ($k['id'] ?? '') !== $id;
+        }));
+
+        if (count($keys) < $initial) {
+            api_keys_write($keys);
+            return true;
+        }
+        return false;
+    } finally {
+        flock($lock, LOCK_UN);
+        fclose($lock);
+    }
 }
 
 /**

@@ -677,7 +677,8 @@ function node_save_image(string $node_id, string $image_data, string $extension 
     $extension = in_array($extension, $safe_extensions, true) ? $extension : 'png';
 
     $timestamp = time();
-    $filename = $node_id . '-' . $timestamp . '.' . $extension;
+    $random = bin2hex(random_bytes(4));
+    $filename = $node_id . '-' . $timestamp . '-' . $random . '.' . $extension;
     $filepath = $images_dir . '/' . $filename;
 
     atomic_write($filepath, $image_data);

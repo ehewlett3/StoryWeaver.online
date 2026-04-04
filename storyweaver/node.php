@@ -250,7 +250,6 @@ if ($user && $is_root_node) {
         <?php endif; ?>
 
         <!-- Choices -->
-        <?php if (!empty($node['choices']) || true): ?>
         <section class="sw-choices">
             <?php if (!empty($node['choices'])): ?>
                 <h2>What do you do?</h2>
@@ -305,7 +304,6 @@ if ($user && $is_root_node) {
                 </button>
             <?php endif; ?>
         </section>
-        <?php endif; ?>
 
         <?php if ($can_change_theme): ?>
         <!-- Per-story theme picker (story creator / admin on root node) -->
