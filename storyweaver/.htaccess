@@ -1,0 +1,29 @@
+# ----------------------------------------------------------------------
+# StoryWeaver — Apache access rules
+# Block direct HTTP access to private directories.
+# ----------------------------------------------------------------------
+
+Options -Indexes
+DirectoryIndex index.php
+
+# Block access to private data directories
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+
+  # Deny access to _data/
+  RewriteRule ^_data/ - [F,L]
+
+  # Deny access to quarantine/
+  RewriteRule ^quarantine/ - [F,L]
+
+  # Deny access to _mail/
+  RewriteRule ^_mail/ - [F,L]
+
+  # Deny access to _lib/
+  RewriteRule ^_lib/ - [F,L]
+</IfModule>
+
+# Fallback for servers without mod_rewrite — nested .htaccess files
+# deny access to sensitive directories directly.
+# (Each directory below should also contain its own .htaccess with "Require all denied"
+#  as a defense-in-depth measure.)

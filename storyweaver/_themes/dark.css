@@ -1,0 +1,197 @@
+/**
+ * StoryWeaver — Dark Theme
+ *
+ * Dark color scheme. Overrides CSS custom properties from default.css.
+ * All structural styles (layout, typography, components) are inherited
+ * from default.css — this file only redefines colors.
+ */
+
+@import url('default.css');
+
+:root {
+    --sw-color-bg: #1a1a2e;
+    --sw-color-surface: #16213e;
+    --sw-color-text: #e0e0e0;
+    --sw-color-text-muted: #8b8fa3;
+    --sw-color-border: #2a2d4a;
+    --sw-color-primary: #a78bfa;
+    --sw-color-primary-hover: #8b5cf6;
+    --sw-color-primary-light: #2d2150;
+    --sw-color-success: #34d399;
+    --sw-color-success-bg: #0d2818;
+    --sw-color-error: #f87171;
+    --sw-color-error-bg: #2d1010;
+    --sw-color-info: #60a5fa;
+    --sw-color-info-bg: #0f1a2e;
+    --sw-color-warning: #fbbf24;
+    --sw-color-warning-bg: #2d2010;
+}
+
+/* Override specific elements that use hardcoded colors */
+
+body {
+    background: var(--sw-color-bg);
+    color: var(--sw-color-text);
+}
+
+.sw-nav {
+    background: #0f0f23;
+    border-bottom-color: var(--sw-color-border);
+}
+
+.sw-nav-brand {
+    color: var(--sw-color-primary);
+}
+
+.sw-container {
+    color: var(--sw-color-text);
+}
+
+.sw-input, .sw-textarea, select.sw-input {
+    background: var(--sw-color-bg);
+    color: var(--sw-color-text);
+    border-color: var(--sw-color-border);
+}
+
+.sw-input:focus, .sw-textarea:focus {
+    border-color: var(--sw-color-primary);
+    box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.2);
+}
+
+.sw-btn-secondary {
+    background: var(--sw-color-surface);
+    color: var(--sw-color-text);
+    border-color: var(--sw-color-border);
+}
+
+.sw-btn-secondary:hover {
+    background: var(--sw-color-border);
+}
+
+/* Story cards */
+.sw-story-card {
+    background: var(--sw-color-surface);
+    border-color: var(--sw-color-border);
+}
+
+.sw-story-card:hover {
+    border-color: var(--sw-color-primary);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+/* Choices */
+.sw-choices a {
+    color: var(--sw-color-primary);
+}
+
+.sw-choices a:hover {
+    color: var(--sw-color-primary-hover);
+}
+
+/* Modal */
+.sw-modal-content,
+.sw-gen-modal {
+    background: var(--sw-color-surface);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+/* Flash messages */
+.sw-flash-success {
+    background: var(--sw-color-success-bg);
+    color: var(--sw-color-success);
+}
+
+.sw-flash-error {
+    background: var(--sw-color-error-bg);
+    color: var(--sw-color-error);
+}
+
+/* Badges */
+.sw-badge-success {
+    background: #0d2818;
+    color: #34d399;
+}
+
+.sw-badge-warning {
+    background: #2d2010;
+    color: #fbbf24;
+}
+
+.sw-badge-primary {
+    background: #2d2150;
+    color: #a78bfa;
+}
+
+.sw-badge-danger {
+    background: #2d1010;
+    color: #f87171;
+}
+
+/* Admin items */
+.sw-admin-item {
+    background: var(--sw-color-surface);
+    border-color: var(--sw-color-border);
+}
+
+/* Tabs */
+.sw-tab {
+    color: var(--sw-color-text-muted);
+}
+
+.sw-tab-active {
+    color: var(--sw-color-primary);
+    border-bottom-color: var(--sw-color-primary);
+}
+
+/* Key items */
+.sw-key-item {
+    background: var(--sw-color-surface);
+    border-color: var(--sw-color-border);
+}
+
+/* Alert overrides */
+.sw-alert-warning {
+    background: #2d2010;
+    color: #fbbf24;
+    border-color: #4a3a18;
+}
+
+/* Concern reason */
+.sw-concern-reason {
+    color: var(--sw-color-text-muted);
+}
+
+/* Generation overlay */
+.sw-gen-text {
+    background: var(--sw-color-bg);
+    color: var(--sw-color-text);
+}
+
+/* Editor */
+.sw-editor-content {
+    background: var(--sw-color-surface);
+    color: var(--sw-color-text);
+}
+
+/* Node footer */
+.sw-node-footer {
+    border-top-color: var(--sw-color-border);
+}
+
+/* Scrollbar styling for dark mode */
+::-webkit-scrollbar {
+    width: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--sw-color-bg);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--sw-color-border);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--sw-color-text-muted);
+}

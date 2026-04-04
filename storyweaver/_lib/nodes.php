@@ -1,0 +1,686 @@
+<?php
+/**
+ * StoryWeaver — Story node HTML template and CRUD helpers.
+ *
+ * Manages story directories and node HTML files under stories/.
+ * Every node is a self-contained HTML file matching the §2.3 template.
+ */
+
+require_once __DIR__ . '/helpers.php';
+require_once __DIR__ . '/users.php';
+
+/* ------------------------------------------------------------------
+ * Constants
+ * ----------------------------------------------------------------*/
+
+/** Filesystem path to the stories directory. */
+define('STORIES_DIR', sw_root() . '/stories');
+
+/** Filesystem path to the quarantine directory. */
+define('QUARANTINE_DIR', sw_root() . '/quarantine');
+
+/**
+ * Resolve the filesystem path for a node, checking both stories and quarantine.
+ *
+ * @return string|null Full path if found, null otherwise.
+ */
+function node_resolve_path(string $story_id, string $node_id): ?string
+{
+    $path = STORIES_DIR . '/' . $story_id . '/' . $node_id . '.html';
+    if (file_exists($path)) return $path;
+    $path = QUARANTINE_DIR . '/' . $story_id . '/' . $node_id . '.html';
+    if (file_exists($path)) return $path;
+    return null;
+}
+
+/* ------------------------------------------------------------------
+ * Story Management
+ * ----------------------------------------------------------------*/
+
+/**
+ * Create a new story directory and its root node.
+ *
+ * @param string $title     Story title.
+ * @param string $author_id User ID of the creator (or 'anonymous').
+ * @param array  $paragraphs Optional initial paragraphs for the root node.
+ * @return array ['story_id' => string, 'node_id' => string]
+ */
+function story_create(string $title, string $author_id = 'anonymous', array $paragraphs = [], array $ai_meta = []): array
+{
+    $story_id = generate_id('story_');
+    $story_dir = STORIES_DIR . '/' . $story_id;
+
+    if (!is_dir($story_dir)) {
+        mkdir($story_dir, 0755, true);
+    }
+
+    $node_id = node_create($story_id, array_merge([
+        'parent_id'    => '',
+        'choice_taken' => '',
+        'author_id'    => $author_id,
+        'title'        => $title,
+        'paragraphs'   => $paragraphs ?: ['Begin your story here…'],
+        'choices'      => [],
+    ], $ai_meta));
+
+    return ['story_id' => $story_id, 'node_id' => $node_id];
+}
+
+/**
+ * Find the root node of a story (the one with empty sw-parent-id).
+ *
+ * @param string $story_id Story ID.
+ * @return string|null Root node ID, or null if not found.
+ */
+function story_find_root(string $story_id): ?string
+{
+    $story_dir = STORIES_DIR . '/' . $story_id;
+    if (!is_dir($story_dir)) {
+        return null;
+    }
+
+    $files = glob($story_dir . '/node_*.html');
+    foreach ($files as $file) {
+        $html = file_get_contents($file);
+        if ($html === false) continue;
+
+        // Root node has empty sw-parent-id
+        if (preg_match('/name="sw-parent-id"\s+content=""/i', $html)) {
+            return basename($file, '.html');
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Get the title of a story by reading its root node.
+ *
+ * @param string $story_id Story ID.
+ * @return string Story title, or the story_id as fallback.
+ */
+function story_get_title(string $story_id): string
+{
+    $root_id = story_find_root($story_id);
+    if ($root_id === null) {
+        return $story_id;
+    }
+
+    $node = node_read($story_id, $root_id);
+    return $node['title'] ?? $story_id;
+}
+
+/* ------------------------------------------------------------------
+ * Node CRUD
+ * ----------------------------------------------------------------*/
+
+/**
+ * Create a new node in a story.
+ *
+ * Generates a node ID, builds the HTML from the template, writes the file.
+ *
+ * @param string $story_id Story ID.
+ * @param array  $params   Node parameters:
+ *   - parent_id    (string) Parent node ID, or '' for root.
+ *   - choice_taken (string) The choice text that led here, or '' for root.
+ *   - author_id    (string) User ID or 'anonymous'.
+ *   - title        (string) Story title (used in <title> and breadcrumb).
+ *   - paragraphs   (array)  Array of paragraph strings.
+ *   - choices      (array)  Array of ['id' => int, 'text' => string, 'node' => string|null].
+ * @return string The generated node ID.
+ */
+function node_create(string $story_id, array $params): string
+{
+    $node_id = generate_id('node_');
+
+    $html = node_generate_html(array_merge($params, [
+        'story_id' => $story_id,
+        'node_id'  => $node_id,
+    ]));
+
+    node_write_file($story_id, $node_id, $html);
+
+    return $node_id;
+}
+
+/**
+ * Read and parse a node HTML file into structured data.
+ *
+ * @param string $story_id Story ID.
+ * @param string $node_id  Node ID.
+ * @param bool   $check_quarantine Also check quarantine/ if not found in stories/.
+ * @return array|null Parsed node data, or null if file not found. Keys:
+ *   story_id, node_id, parent_id, choice_taken, created_at, author_id,
+ *   flagged, title, paragraphs (array), choices (array), raw_html.
+ */
+function node_read(string $story_id, string $node_id, bool $check_quarantine = false): ?array
+{
+    $path = STORIES_DIR . '/' . $story_id . '/' . $node_id . '.html';
+    $location = 'stories';
+
+    if (!file_exists($path) && $check_quarantine) {
+        $path = QUARANTINE_DIR . '/' . $story_id . '/' . $node_id . '.html';
+        $location = 'quarantine';
+        if (!file_exists($path)) {
+            return null;
+        }
+    } elseif (!file_exists($path)) {
+        return null;
+    }
+
+    $html = file_get_contents($path);
+    if ($html === false) {
+        return null;
+    }
+
+    return node_parse_html($html, $location);
+}
+
+/**
+ * Parse a node's raw HTML into structured data.
+ *
+ * @param string $html     The raw HTML content.
+ * @param string $location Where the node was found ('stories' or 'quarantine').
+ * @return array Parsed node data.
+ */
+function node_parse_html(string $html, string $location = 'stories'): array
+{
+    $data = [
+        'story_id'     => '',
+        'node_id'      => '',
+        'parent_id'    => '',
+        'choice_taken' => '',
+        'created_at'   => '',
+        'author_id'    => '',
+        'flagged'      => 'false',
+        'title'        => '',
+        'paragraphs'   => [],
+        'choices'      => [],
+        'raw_html'     => $html,
+        'location'     => $location,
+    ];
+
+    // Extract meta tags
+    $meta_map = [
+        'sw-story-id'    => 'story_id',
+        'sw-node-id'     => 'node_id',
+        'sw-parent-id'   => 'parent_id',
+        'sw-choice-taken' => 'choice_taken',
+        'sw-created-at'  => 'created_at',
+        'sw-author-id'   => 'author_id',
+        'sw-flagged'     => 'flagged',
+    ];
+
+    foreach ($meta_map as $meta_name => $key) {
+        if (preg_match('/name="' . preg_quote($meta_name, '/') . '"\s+content="([^"]*)"/i', $html, $m)) {
+            $data[$key] = $m[1];
+        }
+    }
+
+    // Extract title (before the " — " separator)
+    if (preg_match('/<title>([^<]+)<\/title>/i', $html, $m)) {
+        $parts = explode(' — ', $m[1], 2);
+        $data['title'] = trim($parts[0]);
+    }
+
+    // Extract paragraphs
+    if (preg_match_all('/<p class="sw-para">(.*?)<\/p>/s', $html, $matches)) {
+        $data['paragraphs'] = $matches[1];
+    }
+
+    // Extract choices from data-choices-json attribute
+    if (preg_match("/data-choices-json='(\[.*?\])'/s", $html, $m)) {
+        $choices = json_decode(html_entity_decode($m[1], ENT_QUOTES, 'UTF-8'), true);
+        if (is_array($choices)) {
+            $data['choices'] = $choices;
+        }
+    }
+
+    // Extract sw-meta comment block
+    $data['sw_meta'] = null;
+    if (preg_match('/<!-- sw-meta: ({.*?}) -->/s', $html, $m)) {
+        $meta = json_decode($m[1], true);
+        if (is_array($meta)) {
+            $data['sw_meta'] = $meta;
+        }
+    }
+
+    return $data;
+}
+
+/**
+ * Update the paragraphs in an existing node HTML file.
+ *
+ * Replaces the content inside <article class="sw-node-content"> with
+ * new <p class="sw-para"> elements. Does not touch other parts of the HTML.
+ *
+ * @param string $story_id   Story ID.
+ * @param string $node_id    Node ID.
+ * @param array  $paragraphs Array of paragraph HTML strings (already sanitized).
+ * @return bool True if successful.
+ */
+function node_update_paragraphs(string $story_id, string $node_id, array $paragraphs): bool
+{
+    $path = node_resolve_path($story_id, $node_id);
+    if ($path === null) {
+        return false;
+    }
+
+    $html = file_get_contents($path);
+    if ($html === false) {
+        return false;
+    }
+
+    // Build new paragraph HTML
+    $para_html = '';
+    foreach ($paragraphs as $p) {
+        $para_html .= '    <p class="sw-para">' . $p . "</p>\n";
+    }
+
+    // Replace the article content
+    $pattern = '/(<article class="sw-node-content">)\s*.*?\s*(<\/article>)/s';
+    $replacement = "$1\n" . $para_html . "  $2";
+    $new_html = preg_replace($pattern, $replacement, $html, 1);
+
+    if ($new_html === null || $new_html === $html && !empty($paragraphs)) {
+        return false;
+    }
+
+    atomic_write($path, $new_html);
+    return true;
+}
+
+/**
+ * Append a modification entry to the node's sw-meta history.
+ *
+ * @param string $story_id Story ID.
+ * @param string $node_id  Node ID.
+ * @param string $user_id  Who made the change.
+ * @param string $action   Action type (e.g. 'edited', 'ai_regenerated').
+ * @param string $ai_model Optional AI model used.
+ * @return void
+ */
+function node_meta_log(string $story_id, string $node_id, string $user_id, string $action, string $ai_model = ''): void
+{
+    $path = node_resolve_path($story_id, $node_id);
+    if ($path === null) return;
+
+    $html = file_get_contents($path);
+    if ($html === false) return;
+
+    $entry = [
+        'action'   => $action,
+        'by'       => $user_id,
+        'at'       => gmdate('Y-m-d\TH:i:s\Z'),
+        'ai_model' => $ai_model ?: null,
+    ];
+
+    if (preg_match('/<!-- sw-meta: ({.*?}) -->/s', $html, $m)) {
+        $meta = json_decode($m[1], true);
+        if (!is_array($meta)) $meta = [];
+        if (!isset($meta['history'])) $meta['history'] = [];
+        $meta['history'][] = $entry;
+        $new_comment = '<!-- sw-meta: ' . json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ' -->';
+        $html = str_replace($m[0], $new_comment, $html);
+    } else {
+        // No existing meta — inject one after <head>
+        $meta = ['history' => [$entry]];
+        $new_comment = '<!-- sw-meta: ' . json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ' -->';
+        $html = preg_replace('/<head>/', "<head>\n  " . $new_comment, $html, 1);
+    }
+
+    atomic_write($path, $html);
+}
+
+/**
+ * Replace the sw-meta block in a node's HTML file.
+ *
+ * @param string $story_id Story ID.
+ * @param string $node_id  Node ID.
+ * @param array  $meta     Complete metadata array to write.
+ */
+function node_update_meta(string $story_id, string $node_id, array $meta): void
+{
+    $path = node_resolve_path($story_id, $node_id);
+    if ($path === null) return;
+
+    $html = file_get_contents($path);
+    if ($html === false) return;
+
+    $new_comment = '<!-- sw-meta: ' . json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ' -->';
+
+    if (preg_match('/<!-- sw-meta: ({.*?}) -->/s', $html, $m)) {
+        $html = str_replace($m[0], $new_comment, $html);
+    } else {
+        $html = preg_replace('/<head>/', "<head>\n  " . $new_comment, $html, 1);
+    }
+
+    atomic_write($path, $html);
+}
+
+/**
+ * Update the choices section in an existing node HTML file.
+ *
+ * @param string $story_id Story ID.
+ * @param string $node_id  Node ID.
+ * @param array  $choices  Array of ['id' => int, 'text' => string, 'node' => string|null].
+ * @return bool True if successful.
+ */
+function node_update_choices(string $story_id, string $node_id, array $choices): bool
+{
+    $node = node_read($story_id, $node_id, true);
+    if ($node === null) {
+        return false;
+    }
+
+    // Rebuild the full HTML with updated choices
+    $html = node_generate_html([
+        'story_id'     => $node['story_id'],
+        'node_id'      => $node['node_id'],
+        'parent_id'    => $node['parent_id'],
+        'choice_taken' => $node['choice_taken'],
+        'author_id'    => $node['author_id'],
+        'title'        => $node['title'],
+        'paragraphs'   => $node['paragraphs'],
+        'choices'      => $choices,
+        'created_at'   => $node['created_at'],
+        'flagged'      => $node['flagged'],
+    ]);
+
+    $path = node_resolve_path($story_id, $node_id)
+         ?? STORIES_DIR . '/' . $story_id . '/' . $node_id . '.html';
+    atomic_write($path, $html);
+    return true;
+}
+
+/**
+ * Link a parent node's choice to a newly created child node.
+ *
+ * Finds the choice matching the given text and sets its 'node' field
+ * to point to the new child. If the choice doesn't exist (custom choice),
+ * appends it.
+ *
+ * @param string $story_id      Story ID.
+ * @param string $parent_node_id Parent node ID.
+ * @param string $choice_text   The choice text that was taken.
+ * @param string $child_node_id The new child node ID.
+ * @return bool True if successful.
+ */
+function node_link_choice(string $story_id, string $parent_node_id, string $choice_text, string $child_node_id): bool
+{
+    $parent = node_read($story_id, $parent_node_id, true);
+    if ($parent === null) {
+        return false;
+    }
+
+    $choices = $parent['choices'];
+    $found = false;
+
+    foreach ($choices as &$choice) {
+        if ($choice['text'] === $choice_text && $choice['node'] === null) {
+            $choice['node'] = $child_node_id . '.html';
+            $found = true;
+            break;
+        }
+    }
+    unset($choice);
+
+    // If not found, add as a new choice (custom choice path)
+    if (!$found) {
+        $next_id = count($choices) + 1;
+        $choices[] = [
+            'id'   => $next_id,
+            'text' => $choice_text,
+            'node' => $child_node_id . '.html',
+        ];
+    }
+
+    return node_update_choices($story_id, $parent_node_id, $choices);
+}
+
+/* ------------------------------------------------------------------
+ * Node File I/O
+ * ----------------------------------------------------------------*/
+
+/**
+ * Write a node HTML file atomically.
+ *
+ * Creates the story directory if it doesn't exist.
+ *
+ * @param string $story_id Story ID.
+ * @param string $node_id  Node ID.
+ * @param string $html     Complete HTML content.
+ * @return void
+ */
+function node_write_file(string $story_id, string $node_id, string $html): void
+{
+    $dir = STORIES_DIR . '/' . $story_id;
+    if (!is_dir($dir)) {
+        mkdir($dir, 0755, true);
+    }
+    atomic_write($dir . '/' . $node_id . '.html', $html);
+}
+
+/**
+ * Get the filesystem path for a node.
+ *
+ * @param string $story_id Story ID.
+ * @param string $node_id  Node ID.
+ * @return string Absolute file path.
+ */
+function node_path(string $story_id, string $node_id): string
+{
+    return STORIES_DIR . '/' . $story_id . '/' . $node_id . '.html';
+}
+
+/* ------------------------------------------------------------------
+ * HTML Template
+ * ----------------------------------------------------------------*/
+
+/**
+ * Generate the full HTML for a story node matching the §2.3 template.
+ *
+ * @param array $params Node parameters:
+ *   - story_id     (string) Story ID.
+ *   - node_id      (string) Node ID.
+ *   - parent_id    (string) Parent node ID, or '' for root.
+ *   - choice_taken (string) Choice text that led here, or '' for root.
+ *   - author_id    (string) User ID or 'anonymous'.
+ *   - title        (string) Story title.
+ *   - paragraphs   (array)  Array of paragraph HTML strings.
+ *   - choices      (array)  Array of ['id'=>int, 'text'=>string, 'node'=>string|null].
+ *   - created_at   (string) Optional ISO timestamp (generated if empty).
+ *   - flagged      (string) Optional 'true'/'false' (defaults to 'false').
+ *   - ai_model     (string) Optional AI model used for generation.
+ *   - ai_provider  (string) Optional AI provider name.
+ *   - ai_key_label (string) Optional AI key label.
+ * @return string Complete HTML document.
+ */
+function node_generate_html(array $params): string
+{
+    $story_id     = $params['story_id'];
+    $node_id      = $params['node_id'];
+    $parent_id    = $params['parent_id'] ?? '';
+    $choice_taken = $params['choice_taken'] ?? '';
+    $author_id    = $params['author_id'] ?? 'anonymous';
+    $title        = $params['title'] ?? 'Untitled Story';
+    $paragraphs   = $params['paragraphs'] ?? [];
+    $choices      = $params['choices'] ?? [];
+    $created_at   = $params['created_at'] ?? gmdate('Y-m-d\TH:i:s\Z');
+    $flagged      = $params['flagged'] ?? 'false';
+
+    // AI generation metadata (if AI-generated)
+    $ai_model     = $params['ai_model'] ?? '';
+    $ai_provider  = $params['ai_provider'] ?? '';
+    $ai_key_label = $params['ai_key_label'] ?? '';
+
+    // Build metadata comment block
+    $meta_log = [
+        'created_by' => $author_id,
+        'created_at' => $created_at,
+    ];
+    if ($ai_model !== '') {
+        $meta_log['ai_generated'] = true;
+        $meta_log['ai_model'] = $ai_model;
+        $meta_log['ai_provider'] = $ai_provider;
+        $meta_log['ai_key_label'] = $ai_key_label;
+    }
+    $meta_log['history'] = [
+        [
+            'action' => 'created',
+            'by'     => $author_id,
+            'at'     => $created_at,
+            'ai_model' => $ai_model ?: null,
+        ],
+    ];
+    $meta_comment = '<!-- sw-meta: ' . json_encode($meta_log, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ' -->';
+
+    // Active theme for the CSS link
+    $theme_css    = theme_active();
+
+    // Find root node for breadcrumb link
+    $root_id = story_find_root($story_id);
+    $root_link = $root_id ? ($root_id . '.html') : '#';
+
+    // Build paragraphs HTML
+    $para_html = '';
+    foreach ($paragraphs as $p) {
+        $para_html .= '    <p class="sw-para">' . $p . "</p>\n";
+    }
+    if ($para_html === '') {
+        $para_html = "    <p class=\"sw-para\"></p>\n";
+    }
+
+    // Build choices JSON and list HTML
+    $choices_json = h(json_encode($choices, JSON_UNESCAPED_UNICODE));
+    $choices_list_html = '';
+    foreach ($choices as $c) {
+        $text = h($c['text']);
+        if ($c['node'] !== null) {
+            $choices_list_html .= '      <li><a href="' . h($c['node']) . '">' . $text . "</a></li>\n";
+        } else {
+            $choices_list_html .= '      <li><a href="#" class="sw-choice-pending" data-choice-id="'
+                                . (int)$c['id'] . '">' . $text . "</a></li>\n";
+        }
+    }
+
+    // Back link
+    $back_html = '';
+    if ($parent_id !== '') {
+        $back_html = '<a class="sw-back" href="' . h($parent_id) . '.html">← Back</a>';
+    }
+
+    // Assemble the full HTML document
+    $html = <<<HTML
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  {$meta_comment}
+  <meta charset="UTF-8">
+  <meta name="sw-story-id" content="{$story_id}">
+  <meta name="sw-node-id" content="{$node_id}">
+  <meta name="sw-parent-id" content="{$parent_id}">
+  <meta name="sw-choice-taken" content="{$choice_taken}">
+  <meta name="sw-created-at" content="{$created_at}">
+  <meta name="sw-author-id" content="{$author_id}">
+  <meta name="sw-flagged" content="{$flagged}">
+  <link rel="stylesheet" href="../../_themes/{$theme_css}">
+  <title>{$title} — {$node_id}</title>
+</head>
+<body data-sw-node="true">
+
+  <nav class="sw-breadcrumb">
+    <a href="../../index.php">All Stories</a> ›
+    <a href="{$root_link}">{$title}</a>
+  </nav>
+
+  <article class="sw-node-content">
+{$para_html}  </article>
+
+  <div class="sw-images">
+  </div>
+
+  <section class="sw-choices" data-choices-json='{$choices_json}'>
+    <h2>What do you do?</h2>
+    <ul>
+{$choices_list_html}    </ul>
+    <form class="sw-custom-choice" action="../../play.php" method="POST">
+      <input type="hidden" name="story_id" value="{$story_id}">
+      <input type="hidden" name="parent_node_id" value="{$node_id}">
+      <input type="hidden" name="_csrf_token" value="">
+      <input type="text" name="custom_choice" placeholder="Or type your own action…">
+      <button type="submit">Continue →</button>
+    </form>
+  </section>
+
+  <footer class="sw-node-footer">
+    {$back_html}
+    <span class="sw-flag-concern">
+      <a href="../../api.php?action=flag_concern&node={$node_id}">⚑ Flag for review</a>
+    </span>
+  </footer>
+
+  <script src="../../_assets/sw.js"></script>
+</body>
+</html>
+HTML;
+
+    return $html;
+}
+
+/* ------------------------------------------------------------------
+ * Sanitization
+ * ----------------------------------------------------------------*/
+
+/**
+ * Sanitize a paragraph of HTML from the contenteditable editor.
+ *
+ * Allows basic formatting tags (b, i, em, strong, a, br) and strips
+ * everything else including <script>, event handlers, etc.
+ *
+ * @param string $html Raw HTML from the editor.
+ * @return string Sanitized HTML.
+ */
+function sanitize_paragraph_html(string $html): string
+{
+    // Strip all tags except allowed formatting tags
+    $allowed = '<b><i><em><strong><a><br><u>';
+    $clean = strip_tags($html, $allowed);
+
+    // Remove any event handler attributes (onclick, onerror, etc.)
+    $clean = preg_replace('/\s+on\w+\s*=\s*["\'][^"\']*["\']/i', '', $clean);
+    $clean = preg_replace('/\s+on\w+\s*=\s*\S+/i', '', $clean);
+
+    // Remove javascript: URLs from <a> tags
+    $clean = preg_replace('/href\s*=\s*["\']javascript:[^"\']*["\']/i', 'href="#"', $clean);
+
+    return trim($clean);
+}
+
+/**
+ * Save an image file to the assets directory and return its relative URL.
+ *
+ * @param string $node_id      The node ID this image belongs to.
+ * @param string $image_data   Raw binary image data.
+ * @param string $extension    File extension (default "png").
+ * @return string The image URL path relative to the storyweaver root.
+ */
+function node_save_image(string $node_id, string $image_data, string $extension = 'png'): string
+{
+    $images_dir = sw_root() . '/_assets/images';
+    if (!is_dir($images_dir)) {
+        mkdir($images_dir, 0755, true);
+    }
+
+    // Whitelist safe image extensions
+    $safe_extensions = ['png', 'jpg', 'jpeg', 'gif', 'webp'];
+    $extension = in_array($extension, $safe_extensions, true) ? $extension : 'png';
+
+    $timestamp = time();
+    $filename = $node_id . '-' . $timestamp . '.' . $extension;
+    $filepath = $images_dir . '/' . $filename;
+
+    atomic_write($filepath, $image_data);
+
+    return '/_assets/images/' . $filename;
+}

@@ -1,0 +1,12 @@
+# User data — never commit
+_data/
+_mail/
+
+# User-generated content
+stories/*
+!stories/.gitkeep
+quarantine/*
+!quarantine/.gitkeep
+!quarantine/.htaccess
+_assets/images/*
+!_assets/images/.gitkeep
