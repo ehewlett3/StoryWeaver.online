@@ -329,7 +329,7 @@ function data_path(string $file = ''): string
 function themes_read(): array
 {
     $data = json_read(data_path('themes.json'));
-    if ($data === null) {
+    if (empty($data) || !isset($data['themes'])) {
         return ['active' => 'default.css', 'themes' => [
             ['name' => 'Default (Light)', 'file' => 'default.css'],
             ['name' => 'Dark', 'file' => 'dark.css'],
