@@ -116,37 +116,59 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     /**
-     * Get the selected key ID from whichever key picker is present.
-     * Checks the node page picker first, then the modal picker.
+     * Get the selected text-generation key ID.
      */
-    function getSelectedKeyId() {
-        var picker = document.getElementById('sw-key-picker')
+    function getSelectedTextKeyId() {
+        var picker = document.getElementById('sw-text-key-picker')
                   || document.getElementById('sw-key-picker-modal');
         if (!picker) return '';
         return picker.value;
     }
 
-    // Restore last chosen key from localStorage and listen for changes
+    /**
+     * Get the selected image-generation key ID.
+     */
+    function getSelectedImageKeyId() {
+        var picker = document.getElementById('sw-image-key-picker');
+        if (!picker) return '';
+        return picker.value;
+    }
+
+    // Backward-compatible alias
+    function getSelectedKeyId() {
+        return getSelectedTextKeyId();
+    }
+
+    // Restore last chosen keys from localStorage and listen for changes
     (function () {
-        var pickers = [
-            document.getElementById('sw-key-picker'),
+        var textPickers = [
+            document.getElementById('sw-text-key-picker'),
             document.getElementById('sw-key-picker-modal')
         ];
-        var saved = localStorage.getItem('sw-last-key-id');
-        pickers.forEach(function (picker) {
-            if (!picker) return;
-            if (saved) {
-                for (var i = 0; i < picker.options.length; i++) {
-                    if (picker.options[i].value === saved) {
-                        picker.value = saved;
-                        break;
+        var imagePickers = [
+            document.getElementById('sw-image-key-picker')
+        ];
+
+        function restoreAndListen(pickers, storageKey) {
+            var saved = localStorage.getItem(storageKey);
+            pickers.forEach(function (picker) {
+                if (!picker) return;
+                if (saved) {
+                    for (var i = 0; i < picker.options.length; i++) {
+                        if (picker.options[i].value === saved) {
+                            picker.value = saved;
+                            break;
+                        }
                     }
                 }
-            }
-            picker.addEventListener('change', function () {
-                localStorage.setItem('sw-last-key-id', picker.value);
+                picker.addEventListener('change', function () {
+                    localStorage.setItem(storageKey, picker.value);
+                });
             });
-        });
+        }
+
+        restoreAndListen(textPickers, 'sw-last-text-key-id');
+        restoreAndListen(imagePickers, 'sw-last-image-key-id');
     })();
 
     /**
@@ -217,11 +239,11 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         payload._csrf_token = csrfValue;
-        payload.key_id = payload.key_id || getSelectedKeyId();
+        payload.key_id = payload.key_id || getSelectedTextKeyId();
 
-        // Persist key choice for next time
+        // Persist text key choice for next time
         if (payload.key_id) {
-            localStorage.setItem('sw-last-key-id', payload.key_id);
+            localStorage.setItem('sw-last-text-key-id', payload.key_id);
         }
 
         // Use fetch + ReadableStream for SSE (more control than EventSource for POST)
@@ -481,7 +503,7 @@ document.addEventListener('DOMContentLoaded', function () {
         genImageBtn.addEventListener('click', function () {
             var storyId = genImageBtn.getAttribute('data-story-id');
             var nodeId = genImageBtn.getAttribute('data-node-id');
-            var keyId = getSelectedKeyId();
+            var keyId = getSelectedImageKeyId() || getSelectedTextKeyId();
 
             genImageBtn.disabled = true;
             genImageBtn.textContent = '🖼️ Generating…';
@@ -556,6 +578,107 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
     /* ==================================================================
+     * Image Upload (logged-in users with edit access)
+     * ================================================================*/
+
+    var uploadInput = document.getElementById('sw-image-upload');
+    if (uploadInput) {
+        uploadInput.addEventListener('change', function () {
+            var file = uploadInput.files[0];
+            if (!file) return;
+
+            // Client-side validation
+            var maxSize = 5 * 1024 * 1024; // 5 MB
+            if (file.size > maxSize) {
+                showFlash('Image must be under 5 MB.', 'error');
+                uploadInput.value = '';
+                return;
+            }
+            var allowed = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+            if (allowed.indexOf(file.type) === -1) {
+                showFlash('Only PNG, JPEG, GIF, and WebP images are allowed.', 'error');
+                uploadInput.value = '';
+                return;
+            }
+
+            var storyId = uploadInput.getAttribute('data-story-id');
+            var nodeId = uploadInput.getAttribute('data-node-id');
+
+            var formData = new FormData();
+            formData.append('file', file);
+            formData.append('story_id', storyId);
+            formData.append('node_id', nodeId);
+            formData.append('_csrf_token', csrfValue);
+
+            // Disable while uploading
+            var label = document.querySelector('label[for="sw-image-upload"]');
+            if (label) {
+                label.textContent = '📁 Uploading…';
+                label.style.pointerEvents = 'none';
+            }
+
+            fetch('api.php?action=upload_image', {
+                method: 'POST',
+                headers: { 'Accept': 'application/json' },
+                body: formData
+            })
+            .then(function (res) { return res.json(); })
+            .then(function (data) {
+                if (data.ok && data.image_url) {
+                    var imgContainer = document.getElementById('sw-images');
+                    if (imgContainer) {
+                        var wrap = document.createElement('div');
+                        wrap.className = 'sw-image-wrap';
+                        var img = document.createElement('img');
+                        img.src = data.image_url;
+                        img.alt = 'Story illustration';
+                        img.className = 'sw-node-image';
+                        wrap.appendChild(img);
+
+                        // Add delete button
+                        var delBtn = document.createElement('button');
+                        delBtn.type = 'button';
+                        delBtn.className = 'sw-image-delete-btn';
+                        delBtn.setAttribute('data-image-url', data.image_url);
+                        delBtn.title = 'Delete image';
+                        delBtn.textContent = '×';
+                        delBtn.addEventListener('click', function () {
+                            if (!confirm('Delete this image?')) return;
+                            delBtn.disabled = true;
+                            fetch('api.php?action=delete_image', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ image_url: data.image_url, _csrf_token: csrfValue })
+                            })
+                            .then(function (r) { return r.json(); })
+                            .then(function (d) {
+                                if (d.ok) wrap.remove();
+                                else { showFlash(d.error || 'Failed to delete.', 'error'); delBtn.disabled = false; }
+                            })
+                            .catch(function () { showFlash('Delete request failed.', 'error'); delBtn.disabled = false; });
+                        });
+                        wrap.appendChild(delBtn);
+                        imgContainer.appendChild(wrap);
+                    }
+                    showFlash('Image uploaded!', 'success');
+                } else {
+                    showFlash(data.error || 'Upload failed.', 'error');
+                }
+            })
+            .catch(function () {
+                showFlash('Upload request failed.', 'error');
+            })
+            .finally(function () {
+                uploadInput.value = '';
+                if (label) {
+                    label.textContent = '📁 Upload Image';
+                    label.style.pointerEvents = '';
+                }
+            });
+        });
+    }
+
+    /* ==================================================================
      * Image Regeneration with side-by-side comparison
      * ================================================================*/
 
@@ -565,7 +688,7 @@ document.addEventListener('DOMContentLoaded', function () {
             var storyId = regenImageBtn.getAttribute('data-story-id');
             var nodeId = regenImageBtn.getAttribute('data-node-id');
             var existingUrl = regenImageBtn.getAttribute('data-existing-image');
-            var keyId = getSelectedKeyId();
+            var keyId = getSelectedImageKeyId() || getSelectedTextKeyId();
 
             regenImageBtn.disabled = true;
             regenImageBtn.textContent = '🖼️ Generating new image…';

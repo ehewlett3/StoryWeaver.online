@@ -64,7 +64,15 @@ function handle_new_story(): void
 
     // Try AI generation if requested and key available
     if ($use_ai) {
-        $key_record = api_key_select_for_user($user_id);
+        $key_id = trim($_POST['key_id'] ?? '');
+        if ($key_id !== '' && validate_id($key_id, 'key_')) {
+            $key_record = api_key_find_by_id($key_id);
+            if ($key_record === null || $key_record['status'] !== 'active') {
+                $key_record = null;
+            }
+        } else {
+            $key_record = api_key_select_for_user($user_id);
+        }
         if ($key_record !== null) {
             try {
                 $system_prompt = get_system_prompt($scenario);

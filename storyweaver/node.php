@@ -48,26 +48,34 @@ if ($user) {
 // Quarantine notice
 $is_quarantined = ($node['location'] === 'quarantine');
 
-// AI availability for this user
+// AI availability for this user — build separate text and image key lists
 $user_id_for_key = $user ? $user['id'] : null;
 $selected_key = api_key_select_for_user($user_id_for_key);
-$ai_available = ($selected_key !== null);
-$has_image_model = $ai_available && !empty($selected_key['model_image']);
 $has_images = !empty(glob(sw_root() . '/_assets/images/' . $node_id . '-*'));
 
-// Get all active keys available to this user
 $all_active_keys = [];
+$text_keys = [];
+$image_keys = [];
 $all_keys = api_keys_read();
 foreach ($all_keys as $k) {
-    if ($k['status'] === 'active') {
-        if ($k['scope'] === 'all') {
-            // "all" scoped keys are visible to everyone including guests
-            $all_active_keys[] = ['id' => $k['id'], 'label' => $k['label'], 'provider' => $k['provider']];
-        } elseif ($user && $k['scope'] === 'self' && $k['owner_user_id'] === $user['id']) {
-            $all_active_keys[] = ['id' => $k['id'], 'label' => $k['label'], 'provider' => $k['provider']];
-        }
-    }
+    if ($k['status'] !== 'active') continue;
+    $visible = ($k['scope'] === 'all')
+            || ($user && $k['scope'] === 'self' && $k['owner_user_id'] === $user['id']);
+    if (!$visible) continue;
+
+    $entry = [
+        'id'          => $k['id'],
+        'label'       => $k['label'],
+        'provider'    => $k['provider'],
+        'model_text'  => $k['model_text'] ?? '',
+        'model_image' => $k['model_image'] ?? '',
+    ];
+    $all_active_keys[] = $entry;
+    if (!empty($k['model_text']))  $text_keys[]  = $entry;
+    if (!empty($k['model_image'])) $image_keys[] = $entry;
 }
+$ai_available = !empty($text_keys);
+$has_image_model = !empty($image_keys);
 
 // Per-story theme: read root node's sw_meta for story_theme
 $story_theme = '';
@@ -221,19 +229,41 @@ if ($user && $is_root_node) {
             ?>
         </div>
 
-        <!-- AI Indicator -->
-        <?php if ($ai_available): ?>
+        <!-- AI / Image Controls -->
+        <?php if ($ai_available || $has_image_model || ($user && $can_edit)): ?>
         <div class="sw-ai-indicator">
-            <span class="sw-ai-badge">✨ AI: <?= h($selected_key['label']) ?></span>
-            <?php if (count($all_active_keys) > 1): ?>
-                <select id="sw-key-picker" class="sw-input sw-input-sm">
-                    <?php foreach ($all_active_keys as $ak): ?>
-                        <option value="<?= h($ak['id']) ?>" <?= $ak['id'] === $selected_key['id'] ? 'selected' : '' ?>>
-                            <?= h($ak['label']) ?> (<?= h($ak['provider']) ?>)
-                        </option>
-                    <?php endforeach; ?>
-                </select>
+            <?php if ($ai_available): ?>
+                <!-- Text AI picker -->
+                <?php if (count($text_keys) > 1): ?>
+                    <label class="sw-ai-badge">✨ Text:</label>
+                    <select id="sw-text-key-picker" class="sw-input sw-input-sm">
+                        <?php foreach ($text_keys as $ak): ?>
+                            <option value="<?= h($ak['id']) ?>">
+                                <?= h($ak['label']) ?> — <?= h($ak['model_text']) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                <?php elseif (count($text_keys) === 1): ?>
+                    <span class="sw-ai-badge">✨ Text: <?= h($text_keys[0]['label']) ?> — <?= h($text_keys[0]['model_text']) ?></span>
+                <?php endif; ?>
+
+                <?php if ($has_image_model): ?>
+                    <!-- Image AI picker -->
+                    <?php if (count($image_keys) > 1): ?>
+                        <label class="sw-ai-badge">🖼️ Image:</label>
+                        <select id="sw-image-key-picker" class="sw-input sw-input-sm">
+                            <?php foreach ($image_keys as $ak): ?>
+                                <option value="<?= h($ak['id']) ?>">
+                                    <?= h($ak['label']) ?> — <?= h($ak['model_image']) ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    <?php elseif (count($image_keys) === 1): ?>
+                        <span class="sw-ai-badge">🖼️ Image: <?= h($image_keys[0]['label']) ?> — <?= h($image_keys[0]['model_image']) ?></span>
+                    <?php endif; ?>
+                <?php endif; ?>
             <?php endif; ?>
+
             <?php if ($has_image_model && !$has_images): ?>
                 <button type="button" id="sw-gen-image-btn" class="sw-btn sw-btn-sm sw-btn-secondary"
                         data-story-id="<?= h($story_id) ?>" data-node-id="<?= h($node_id) ?>">
@@ -245,6 +275,15 @@ if ($user && $is_root_node) {
                         data-existing-image="<?= h($base . '/_assets/images/' . basename($image_glob[0])) ?>">
                     🖼️ Regenerate Image
                 </button>
+            <?php endif; ?>
+
+            <?php if ($user && $can_edit): ?>
+                <label for="sw-image-upload" class="sw-btn sw-btn-sm sw-btn-secondary" style="cursor:pointer">
+                    📁 Upload Image
+                </label>
+                <input type="file" id="sw-image-upload" accept="image/png,image/jpeg,image/gif,image/webp"
+                       data-story-id="<?= h($story_id) ?>" data-node-id="<?= h($node_id) ?>"
+                       style="display:none">
             <?php endif; ?>
         </div>
         <?php endif; ?>

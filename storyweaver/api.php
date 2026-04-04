@@ -88,6 +88,9 @@ switch ($action) {
     case 'delete_image':
         handle_delete_image();
         break;
+    case 'upload_image':
+        handle_upload_image();
+        break;
     default:
         json_error('Unknown action.', 400);
 }
@@ -193,14 +196,22 @@ function handle_generate_node(): void
     $choice_text    = trim($input['choice_text'] ?? '');
     $scenario       = trim($input['scenario_essentials'] ?? '');
     $title          = trim($input['title'] ?? '');
+    $key_id         = trim($input['key_id'] ?? '');
 
     // Determine the user for key selection
     $user = current_user();
     $user_id = $user ? $user['id'] : null;
     $author_id = $user ? $user['id'] : 'anonymous';
 
-    // Select an API key
-    $key_record = api_key_select_for_user($user_id);
+    // Select API key (optionally by specific key_id)
+    if ($key_id !== '' && validate_id($key_id, 'key_')) {
+        $key_record = api_key_find_by_id($key_id);
+        if ($key_record === null || $key_record['status'] !== 'active') {
+            $key_record = null;
+        }
+    } else {
+        $key_record = api_key_select_for_user($user_id);
+    }
     if ($key_record === null) {
         json_error('No AI key available. Add one in Settings or write manually.', 400);
     }
@@ -1174,7 +1185,7 @@ function handle_delete_image(): void
 
     // Extract just the filename and validate it
     $filename = basename($image_url);
-    if (!preg_match('/^node_[a-f0-9]{8}-\d+\.(png|jpg|jpeg|gif|webp)$/', $filename)) {
+    if (!preg_match('/^node_[a-f0-9]{8}-\d+-[a-f0-9]{8}\.(png|jpg|jpeg|gif|webp)$/', $filename)) {
         json_error('Invalid image filename.');
     }
 
@@ -1185,4 +1196,80 @@ function handle_delete_image(): void
 
     unlink($path);
     json_success(['message' => 'Image deleted.']);
+}
+
+/**
+ * Upload an image file to a story node.
+ *
+ * Expects multipart/form-data with: file (image), story_id, node_id, _csrf_token.
+ * Requires a logged-in user who is the node author or has editor+ role.
+ */
+function handle_upload_image(): void
+{
+    csrf_check($_POST['_csrf_token'] ?? '');
+
+    $user = current_user();
+    if (!$user) {
+        json_error('You must be logged in to upload images.', 403);
+    }
+
+    $story_id = $_POST['story_id'] ?? '';
+    $node_id  = $_POST['node_id'] ?? '';
+
+    if (!validate_id($story_id, 'story_') || !validate_id($node_id, 'node_')) {
+        json_error('Invalid story or page ID.', 400);
+    }
+
+    // Permission check: author of the node or editor+
+    $node = node_read($story_id, $node_id);
+    if ($node === null) {
+        json_error('Page not found.', 404);
+    }
+    $is_author = ($node['author_id'] === $user['id']);
+    $is_editor = (role_level($user['role']) >= role_level('editor'));
+    if (!$is_author && !$is_editor) {
+        json_error('You can only upload images to your own pages.', 403);
+    }
+
+    // Validate the uploaded file
+    if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
+        $code = $_FILES['file']['error'] ?? -1;
+        $msg = match ($code) {
+            UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE => 'File is too large.',
+            UPLOAD_ERR_NO_FILE => 'No file was uploaded.',
+            default => 'Upload failed (error ' . $code . ').',
+        };
+        json_error($msg, 400);
+    }
+
+    $tmp = $_FILES['file']['tmp_name'];
+    $size = $_FILES['file']['size'];
+
+    // Max 5 MB
+    if ($size > 5 * 1024 * 1024) {
+        json_error('Image must be under 5 MB.', 400);
+    }
+
+    // Verify MIME type via actual file content
+    $finfo = new finfo(FILEINFO_MIME_TYPE);
+    $mime = $finfo->file($tmp);
+    $allowed = [
+        'image/png'  => 'png',
+        'image/jpeg' => 'jpg',
+        'image/gif'  => 'gif',
+        'image/webp' => 'webp',
+    ];
+    if (!isset($allowed[$mime])) {
+        json_error('Only PNG, JPEG, GIF, and WebP images are allowed.', 400);
+    }
+
+    $image_data = file_get_contents($tmp);
+    if ($image_data === false) {
+        json_error('Failed to read uploaded file.', 500);
+    }
+
+    $extension = $allowed[$mime];
+    $image_url = node_save_image($node_id, $image_data, $extension);
+    $base = base_url();
+    json_success(['image_url' => $base . $image_url]);
 }

@@ -17,18 +17,21 @@ if (!users_exists()) {
 $user = current_user();
 $base = base_url();
 
-// Get available AI keys for the new story key picker
+// Get available AI keys for the new story key picker (text-capable keys only)
 $user_id_for_key = $user ? $user['id'] : null;
 $all_active_keys = [];
 $all_keys = api_keys_read();
 foreach ($all_keys as $k) {
-    if ($k['status'] === 'active') {
-        if ($k['scope'] === 'all') {
-            $all_active_keys[] = ['id' => $k['id'], 'label' => $k['label'], 'provider' => $k['provider']];
-        } elseif ($user && $k['scope'] === 'self' && $k['owner_user_id'] === $user['id']) {
-            $all_active_keys[] = ['id' => $k['id'], 'label' => $k['label'], 'provider' => $k['provider']];
-        }
-    }
+    if ($k['status'] !== 'active' || empty($k['model_text'])) continue;
+    $visible = ($k['scope'] === 'all')
+            || ($user && $k['scope'] === 'self' && $k['owner_user_id'] === $user['id']);
+    if (!$visible) continue;
+    $all_active_keys[] = [
+        'id'         => $k['id'],
+        'label'      => $k['label'],
+        'provider'   => $k['provider'],
+        'model_text' => $k['model_text'],
+    ];
 }
 
 // ─── Scan stories directory for existing stories ───
@@ -199,10 +202,10 @@ if (is_dir($stories_dir)) {
 
                 <?php if (count($all_active_keys) > 1): ?>
                 <div class="sw-form-group">
-                    <label for="sw-key-picker-modal">AI Model</label>
-                    <select id="sw-key-picker-modal" class="sw-input sw-input-sm">
+                    <label for="sw-key-picker-modal">Text AI Model</label>
+                    <select id="sw-key-picker-modal" name="key_id" class="sw-input sw-input-sm">
                         <?php foreach ($all_active_keys as $ak): ?>
-                            <option value="<?= h($ak['id']) ?>"><?= h($ak['label']) ?> (<?= h($ak['provider']) ?>)</option>
+                            <option value="<?= h($ak['id']) ?>"><?= h($ak['label']) ?> — <?= h($ak['model_text']) ?></option>
                         <?php endforeach; ?>
                     </select>
                 </div>
