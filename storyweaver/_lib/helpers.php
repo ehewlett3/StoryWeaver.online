@@ -253,7 +253,15 @@ function csrf_check(string $submitted = ''): void
     }
     if (!hash_equals(csrf_token(), $submitted)) {
         http_response_code(403);
-        echo 'Invalid or missing CSRF token.';
+        // Return JSON if the request accepts it (e.g. api.php calls)
+        $accept = $_SERVER['HTTP_ACCEPT'] ?? '';
+        $content_type = $_SERVER['CONTENT_TYPE'] ?? '';
+        if (str_contains($accept, 'application/json') || str_contains($content_type, 'application/json')) {
+            header('Content-Type: application/json; charset=UTF-8');
+            echo json_encode(['ok' => false, 'error' => 'Invalid or missing CSRF token.']);
+        } else {
+            echo 'Invalid or missing CSRF token.';
+        }
         exit;
     }
 }

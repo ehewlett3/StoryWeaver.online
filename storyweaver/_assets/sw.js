@@ -31,6 +31,36 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
     /* ==================================================================
+     * Utility — show a flash message dynamically
+     * ================================================================*/
+
+    function showFlash(message, type) {
+        type = type || 'info';
+        var container = document.querySelector('.sw-container');
+        if (!container) return;
+        var div = document.createElement('div');
+        div.className = 'sw-flash sw-flash-' + type;
+        div.innerHTML = '<span>' + message + '</span>'
+            + '<button type="button" class="sw-flash-dismiss">&times;</button>';
+        container.insertBefore(div, container.firstChild);
+        var btn = div.querySelector('.sw-flash-dismiss');
+        if (btn) {
+            btn.addEventListener('click', function () {
+                div.style.transition = 'opacity 0.3s';
+                div.style.opacity = '0';
+                setTimeout(function () { div.remove(); }, 300);
+            });
+        }
+        if (type !== 'error') {
+            setTimeout(function () {
+                div.style.transition = 'opacity 0.3s';
+                div.style.opacity = '0';
+                setTimeout(function () { div.remove(); }, 300);
+            }, 5000);
+        }
+    }
+
+    /* ==================================================================
      * CSRF Token Injection — fill hidden CSRF fields in node HTML forms
      * ================================================================*/
 
