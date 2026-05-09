@@ -87,7 +87,11 @@ function require_role(string $minimum_role = 'contributor'): array
         ob_start();
         render_main_nav($user, '');
         $nav = ob_get_clean();
+        ob_start();
+        render_brand_favicon_links();
+        $branding = ob_get_clean();
         echo '<!DOCTYPE html><html><head><title>403 Forbidden</title>'
+           . $branding
            . '<link rel="stylesheet" href="' . h(base_url()) . '/_themes/' . h(theme_css()) . '">'
            . '</head><body>'
            . $nav

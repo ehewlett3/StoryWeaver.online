@@ -1,4 +1,4 @@
-# 🧶 StoryWeaver
+<h1><img src="storyweaver/_assets/sw-logo.png" alt="StoryWeaver logo" width="56"> StoryWeaver</h1>
 
 A collaborative, AI-powered choose-your-own-adventure web application.
 
@@ -127,7 +127,8 @@ storyweaver/
 ├── admin.php              # Admin dashboard
 ├── _assets/               # Static assets
 │   ├── sw.js              # Client-side JavaScript (vanilla, no framework)
-│   ├── storyweaver-mark.svg # Shared StoryWeaver app icon
+│   ├── sw-fav.png           # Shared favicon / app icon
+│   ├── sw-logo.png          # Detailed site logo
 │   └── images/            # Generated story images (gitignored)
 ├── _data/                 # Application data (gitignored, auto-created)
 │   ├── .htaccess          # Denies direct HTTP access

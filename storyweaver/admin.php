@@ -72,6 +72,7 @@ function admin_story_title(array &$story_titles, string $story_id): string
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="<?= h(csrf_token()) ?>">
     <title>Admin Dashboard — StoryWeaver</title>
+    <?php render_brand_favicon_links(); ?>
     <link rel="stylesheet" href="<?= h($base) ?>/_themes/<?= h(theme_css()) ?>">
 </head>
 <body>

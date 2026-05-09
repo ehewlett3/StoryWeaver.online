@@ -734,6 +734,8 @@ function node_generate_html(array $params): string
   <meta name="sw-created-at" content="{$created_at}">
   <meta name="sw-author-id" content="{$author_id}">
   <meta name="sw-flagged" content="{$flagged}">
+  <link rel="icon" type="image/png" href="../../_assets/sw-fav.png">
+  <link rel="apple-touch-icon" href="../../_assets/sw-fav.png">
   <link rel="stylesheet" href="../../_themes/{$theme_css}">
   <title>{$title} — {$node_id}</title>
 </head>

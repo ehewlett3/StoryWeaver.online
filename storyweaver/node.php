@@ -110,6 +110,7 @@ if ($user && $is_root_node) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="<?= h(csrf_token()) ?>">
     <title><?= h($node['title']) ?> — <?= h($node_id) ?> — StoryWeaver</title>
+    <?php render_brand_favicon_links(); ?>
     <link rel="stylesheet" href="<?= h($base) ?>/_themes/<?= h($effective_theme) ?>">
 </head>
 <body>
@@ -458,6 +459,7 @@ function render_404(string $message): void
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>404 — StoryWeaver</title>
+    <?php render_brand_favicon_links(); ?>
     <link rel="stylesheet" href="<?= h($base) ?>/_themes/<?= h(theme_css()) ?>">
 </head>
 <body>

@@ -392,6 +392,18 @@ function render_main_nav_link(string $href, string $icon, string $label, bool $a
 }
 
 /**
+ * Render shared favicon and app-icon link tags.
+ */
+function render_brand_favicon_links(): void
+{
+    $base = base_url();
+    ?>
+    <link rel="icon" type="image/png" href="<?= h($base) ?>/_assets/sw-fav.png">
+    <link rel="apple-touch-icon" href="<?= h($base) ?>/_assets/sw-fav.png">
+    <?php
+}
+
+/**
  * Render the shared top navigation bar.
  */
 function render_main_nav(?array $user, string $active = ''): void
@@ -401,7 +413,7 @@ function render_main_nav(?array $user, string $active = ''): void
     ?>
     <nav class="sw-nav">
         <a href="<?= h($base) ?>/index.php" class="sw-nav-brand" title="StoryWeaver home" aria-label="StoryWeaver home">
-            <img src="<?= h($base) ?>/_assets/storyweaver-mark.svg" class="sw-nav-brand-icon" alt="" aria-hidden="true">
+            <img src="<?= h($base) ?>/_assets/sw-logo.png" class="sw-nav-brand-icon" alt="" aria-hidden="true">
             <span class="sw-nav-brand-text">StoryWeaver</span>
         </a>
         <ul class="sw-nav-links">

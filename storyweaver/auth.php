@@ -576,6 +576,7 @@ function render_page(string $title, callable $body, bool $show_nav = true, strin
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?= h($title) ?> — StoryWeaver</title>
+    <?php render_brand_favicon_links(); ?>
     <link rel="stylesheet" href="<?= h($base) ?>/_themes/<?= h(theme_css()) ?>">
 </head>
     <body>

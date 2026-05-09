@@ -59,6 +59,7 @@ $available_fallback_keys = array_values(array_filter($all_keys, function ($k) us
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="<?= h(csrf_token()) ?>">
     <title>Settings — StoryWeaver</title>
+    <?php render_brand_favicon_links(); ?>
     <link rel="stylesheet" href="<?= h($base) ?>/_themes/<?= h(theme_css()) ?>">
 </head>
 <body>
