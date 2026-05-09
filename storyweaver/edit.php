@@ -29,9 +29,8 @@ if ($story_id === '' || $node_id === ''
     redirect($base . '/index.php');
 }
 
-// Read the node (check quarantine for editors/admins)
-$check_quarantine = role_level($user['role']) >= role_level('editor');
-$node = node_read($story_id, $node_id, $check_quarantine);
+// Read the node, including quarantined stories the author may still access
+$node = node_read_for_user($story_id, $node_id, $user);
 if ($node === null) {
     flash('error', 'Page not found.');
     redirect($base . '/index.php');
@@ -59,14 +58,7 @@ $cancel_url = $base . '/node.php?story=' . urlencode($story_id) . '&id=' . urlen
     <link rel="stylesheet" href="<?= h($base) ?>/_themes/<?= h(theme_css()) ?>">
 </head>
 <body>
-    <nav class="sw-nav">
-        <a href="<?= h($base) ?>/index.php" class="sw-nav-brand">🧶 StoryWeaver</a>
-        <ul class="sw-nav-links">
-            <li><a href="<?= h($base) ?>/settings.php">⚙️</a></li>
-            <li><span class="sw-nav-user"><?= h($user['username']) ?></span></li>
-            <li><a href="<?= h($base) ?>/auth.php?action=logout">Log out</a></li>
-        </ul>
-    </nav>
+    <?php render_main_nav($user, 'stories'); ?>
 
     <div class="sw-container">
         <?php
@@ -140,6 +132,6 @@ $cancel_url = $base . '/node.php?story=' . urlencode($story_id) . '&id=' . urlen
         </div>
     </div>
 
-    <script src="<?= h($base) ?>/_assets/sw.js"></script>
+    <script src="<?= h($base) ?>/_assets/sw.js?v=<?= filemtime(sw_root() . '/_assets/sw.js') ?>"></script>
 </body>
 </html>

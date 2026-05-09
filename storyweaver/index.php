@@ -110,22 +110,7 @@ if (is_dir($stories_dir)) {
     <link rel="stylesheet" href="<?= h($base) ?>/_themes/<?= h(theme_css()) ?>">
 </head>
 <body>
-    <nav class="sw-nav">
-        <a href="<?= h($base) ?>/index.php" class="sw-nav-brand">🧶 StoryWeaver</a>
-        <ul class="sw-nav-links">
-            <?php if ($user): ?>
-                <li><a href="<?= h($base) ?>/settings.php">⚙️</a></li>
-                <?php if (in_array($user['role'], ['editor', 'admin'])): ?>
-                    <li><a href="<?= h($base) ?>/admin.php">🛡️</a></li>
-                <?php endif; ?>
-                <li><span class="sw-nav-user"><?= h($user['username']) ?></span></li>
-                <li><a href="<?= h($base) ?>/auth.php?action=logout">Log out</a></li>
-            <?php else: ?>
-                <li><a href="<?= h($base) ?>/auth.php?action=login">Log in</a></li>
-                <li><a href="<?= h($base) ?>/auth.php?action=register">Register</a></li>
-            <?php endif; ?>
-        </ul>
-    </nav>
+    <?php render_main_nav($user, 'stories'); ?>
 
     <div class="sw-container">
         <?php
@@ -195,7 +180,7 @@ if (is_dir($stories_dir)) {
                 <div class="sw-form-group">
                     <label for="scenario-essentials">Scenario Essentials <span class="sw-text-muted">(optional)</span></label>
                     <textarea id="scenario-essentials" name="scenario_essentials" class="sw-input"
-                              rows="3" maxlength="1000"
+                              rows="6" maxlength="4000"
                               placeholder="e.g. Medieval fantasy, the hero is a young blacksmith, dark forest setting…"></textarea>
                     <span class="sw-text-muted sw-text-sm">Help the AI set the scene. Leave blank for a surprise.</span>
                 </div>
@@ -221,6 +206,6 @@ if (is_dir($stories_dir)) {
         </div>
     </div>
 
-    <script src="<?= h($base) ?>/_assets/sw.js"></script>
+    <script src="<?= h($base) ?>/_assets/sw.js?v=<?= filemtime(sw_root() . '/_assets/sw.js') ?>"></script>
 </body>
 </html>

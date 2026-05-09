@@ -7,6 +7,8 @@
 
 document.addEventListener('DOMContentLoaded', function () {
 
+    console.log('[SW] DOMContentLoaded — sw.js loaded OK');
+
     /* ==================================================================
      * Flash Messages
      * ================================================================*/
@@ -40,8 +42,15 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!container) return;
         var div = document.createElement('div');
         div.className = 'sw-flash sw-flash-' + type;
-        div.innerHTML = '<span>' + message + '</span>'
-            + '<button type="button" class="sw-flash-dismiss">&times;</button>';
+        var span = document.createElement('span');
+        span.textContent = message;
+        div.appendChild(span);
+        var dismiss = document.createElement('button');
+        dismiss.type = 'button';
+        dismiss.className = 'sw-flash-dismiss';
+        dismiss.setAttribute('aria-label', 'Dismiss');
+        dismiss.textContent = '\u00D7';
+        div.appendChild(dismiss);
         container.insertBefore(div, container.firstChild);
         var btn = div.querySelector('.sw-flash-dismiss');
         if (btn) {
@@ -95,14 +104,14 @@ document.addEventListener('DOMContentLoaded', function () {
      * Create and show the generation overlay with streaming text.
      * Returns the overlay element.
      */
-    function showGenerationOverlay() {
+    function showGenerationOverlay(titleText) {
         var overlay = document.createElement('div');
         overlay.className = 'sw-gen-overlay';
         overlay.innerHTML =
             '<div class="sw-gen-modal">' +
             '  <div class="sw-gen-header">' +
             '    <span class="sw-gen-spinner">✨</span>' +
-            '    <span class="sw-gen-title">Generating story…</span>' +
+            '    <span class="sw-gen-title">' + (titleText || 'Generating story…') + '</span>' +
             '    <span class="sw-gen-key-label"></span>' +
             '  </div>' +
             '  <div class="sw-gen-text"></div>' +
@@ -137,6 +146,14 @@ document.addEventListener('DOMContentLoaded', function () {
     // Backward-compatible alias
     function getSelectedKeyId() {
         return getSelectedTextKeyId();
+    }
+
+    function promptForOptionalGuidance(actionLabel) {
+        var text = window.prompt('Optional: add extra guidance for ' + actionLabel + '.', '');
+        if (text === null) {
+            return null;
+        }
+        return text.trim();
     }
 
     // Restore last chosen keys from localStorage and listen for changes
@@ -175,11 +192,11 @@ document.addEventListener('DOMContentLoaded', function () {
      * Start a streaming generation request.
      *
      * @param {Object} payload - The request payload.
-     * @param {Object} options - Optional callbacks: onFallback (called if SSE fails)
+     * @param {Object} options - Optional callbacks/config: onFallback, onDone, action, startTitle, doneTitle, failTitle
      */
     function startStreamingGeneration(payload, options) {
         options = options || {};
-        var overlay = showGenerationOverlay();
+        var overlay = showGenerationOverlay(options.startTitle || 'Generating story…');
         var textEl = overlay.querySelector('.sw-gen-text');
         var statusEl = overlay.querySelector('.sw-gen-status');
         var keyLabelEl = overlay.querySelector('.sw-gen-key-label');
@@ -247,7 +264,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         // Use fetch + ReadableStream for SSE (more control than EventSource for POST)
-        fetch(apiBase + '/api.php?action=stream_generate_node', {
+        fetch(apiBase + '/api.php?action=' + (options.action || 'stream_generate_node'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
@@ -300,13 +317,17 @@ document.addEventListener('DOMContentLoaded', function () {
                         } else if (eventType === 'done') {
                             var data;
                             try { data = JSON.parse(rawData); } catch (e) { return; }
-                            // Replace raw stream text with rendered paragraphs + choices
-                            showDropInResult(overlay, data);
+                            if (options.onDone) {
+                                options.onDone(overlay, data, options);
+                            } else {
+                                // Replace raw stream text with rendered paragraphs + choices
+                                showDropInResult(overlay, data, options);
+                            }
                         } else if (eventType === 'error') {
                             var data;
                             try { data = JSON.parse(rawData); } catch (e) { return; }
                             headerEl.querySelector('.sw-gen-spinner').textContent = '\u274C';
-                            headerEl.querySelector('.sw-gen-title').textContent = 'Generation failed';
+                            headerEl.querySelector('.sw-gen-title').textContent = options.failTitle || 'Generation failed';
                             statusEl.textContent = data.error || 'Unknown error';
                             var closeBtn = document.createElement('button');
                             closeBtn.className = 'sw-btn sw-btn-secondary';
@@ -343,14 +364,15 @@ document.addEventListener('DOMContentLoaded', function () {
      * Replace the raw streaming text with rendered paragraphs + choices,
      * each animated with a staggered drop-in effect before redirecting.
      */
-    function showDropInResult(overlay, data) {
+    function showDropInResult(overlay, data, options) {
+        options = options || {};
         var modal = overlay.querySelector('.sw-gen-modal');
         var headerEl = modal.querySelector('.sw-gen-header');
         var textEl = modal.querySelector('.sw-gen-text');
         var statusEl = modal.querySelector('.sw-gen-status');
 
         headerEl.querySelector('.sw-gen-spinner').textContent = '\u2705';
-        headerEl.querySelector('.sw-gen-title').textContent = 'Story generated!';
+        headerEl.querySelector('.sw-gen-title').textContent = options.doneTitle || 'Story generated!';
         statusEl.textContent = '';
 
         // Build rendered content with paragraphs and choices
@@ -395,6 +417,107 @@ document.addEventListener('DOMContentLoaded', function () {
                 }, 500);
             }, totalDelay);
         }, 300);
+    }
+
+    function escapeHtml(str) {
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    function renderStoryComparePreview(paragraphs, choices) {
+        var html = '';
+        (paragraphs || []).forEach(function (p) {
+            html += '<p class="sw-para">' + p + '</p>';
+        });
+        if (!paragraphs || paragraphs.length === 0) {
+            html += '<p class="sw-text-muted"><em>No story text.</em></p>';
+        }
+
+        choices = choices || [];
+        if (choices.length > 0) {
+            html += '<h3 class="sw-story-compare-heading">Choices</h3><ul class="sw-story-compare-choices">';
+            choices.forEach(function (choice) {
+                html += '<li>' + escapeHtml(choice.text || '') + '</li>';
+            });
+            html += '</ul>';
+        }
+
+        return html;
+    }
+
+    function showStoryCompareModal(data) {
+        var overlay = document.createElement('div');
+        overlay.className = 'sw-modal-backdrop sw-modal-open';
+        overlay.innerHTML =
+            '<div class="sw-modal sw-story-compare-modal">' +
+                '<h2>Choose a story version</h2>' +
+                '<p class="sw-text-muted">Click the version you want to keep. Only the selected version will remain.</p>' +
+                '<div class="sw-story-compare">' +
+                    '<div class="sw-story-option" data-choice="current">' +
+                        '<span class="sw-story-label">Current</span>' +
+                        '<div class="sw-story-preview">' + renderStoryComparePreview(data.current_paragraphs || [], data.current_choices || []) + '</div>' +
+                    '</div>' +
+                    '<div class="sw-story-option" data-choice="new">' +
+                        '<span class="sw-story-label">Regenerated</span>' +
+                        '<div class="sw-story-preview">' + renderStoryComparePreview(data.paragraphs || [], data.choices || []) + '</div>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="sw-modal-actions">' +
+                    '<button type="button" class="sw-btn sw-btn-secondary sw-story-compare-cancel">Cancel (keep current)</button>' +
+                '</div>' +
+            '</div>';
+
+        document.body.appendChild(overlay);
+
+        overlay.querySelectorAll('.sw-story-option').forEach(function (opt) {
+            opt.addEventListener('click', function () {
+                if (opt.getAttribute('data-choice') === 'current') {
+                    overlay.remove();
+                    return;
+                }
+
+                overlay.querySelectorAll('.sw-story-option').forEach(function (optionEl) {
+                    optionEl.style.pointerEvents = 'none';
+                });
+
+                fetch(apiBase + '/api.php?action=apply_regenerated_node', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        story_id: data.story_id,
+                        node_id: data.node_id,
+                        paragraphs: data.paragraphs || [],
+                        choices: data.choices || [],
+                        ai_model: data.ai_model || '',
+                        ai_provider: data.ai_provider || '',
+                        ai_key_label: data.ai_key_label || '',
+                        scenario_essentials: data.scenario_essentials || '',
+                        ending: !!data.ending,
+                        _csrf_token: csrfValue
+                    })
+                })
+                .then(function (res) { return res.json(); })
+                .then(function (applyData) {
+                    if (applyData.ok && applyData.url) {
+                        window.location.href = applyData.url;
+                        return;
+                    }
+                    overlay.remove();
+                    showFlash(applyData.error || 'Failed to apply regenerated story.', 'error');
+                })
+                .catch(function (err) {
+                    overlay.remove();
+                    showFlash('Error: ' + err.message, 'error');
+                });
+            });
+        });
+
+        overlay.querySelector('.sw-story-compare-cancel').addEventListener('click', function () {
+            overlay.remove();
+        });
     }
 
     /* ==================================================================
@@ -489,6 +612,64 @@ document.addEventListener('DOMContentLoaded', function () {
                         '<input type="hidden" name="_csrf_token" value="' + csrfValue + '">';
                     document.body.appendChild(form);
                     form.submit();
+                }
+            });
+        });
+    }
+
+    var regenerateStoryBtn = document.getElementById('sw-regenerate-story-btn');
+    if (regenerateStoryBtn) {
+        regenerateStoryBtn.addEventListener('click', function () {
+            if (!confirm('Regenerate this page and replace its current AI choices?')) {
+                return;
+            }
+
+            var steerPrompt = promptForOptionalGuidance('this story regeneration');
+            if (steerPrompt === null) {
+                return;
+            }
+
+            var storyId = regenerateStoryBtn.getAttribute('data-story-id');
+            var nodeId = regenerateStoryBtn.getAttribute('data-node-id');
+            var payload = {
+                story_id: storyId,
+                node_id: nodeId,
+                key_id: getSelectedTextKeyId() || '',
+                steer_prompt: steerPrompt
+            };
+
+            startStreamingGeneration(payload, {
+                action: 'stream_regenerate_node',
+                startTitle: 'Regenerating story…',
+                doneTitle: 'Story regenerated!',
+                failTitle: 'Regeneration failed',
+                onDone: function (overlay, data) {
+                    overlay.remove();
+                    showStoryCompareModal(data);
+                },
+                onFallback: function () {
+                    fetch(apiBase + '/api.php?action=regenerate_node', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            story_id: storyId,
+                            node_id: nodeId,
+                            key_id: payload.key_id,
+                            steer_prompt: steerPrompt,
+                            _csrf_token: csrfValue
+                        })
+                    })
+                    .then(function (res) { return res.json(); })
+                    .then(function (data) {
+                        if (data.ok) {
+                            showStoryCompareModal(data);
+                            return;
+                        }
+                        showFlash(data.error || 'Failed to regenerate the page.', 'error');
+                    })
+                    .catch(function (err) {
+                        showFlash('Error: ' + err.message, 'error');
+                    });
                 }
             });
         });
@@ -685,6 +866,11 @@ document.addEventListener('DOMContentLoaded', function () {
     var regenImageBtn = document.getElementById('sw-regen-image-btn');
     if (regenImageBtn) {
         regenImageBtn.addEventListener('click', function () {
+            var steerPrompt = promptForOptionalGuidance('this image regeneration');
+            if (steerPrompt === null) {
+                return;
+            }
+
             var storyId = regenImageBtn.getAttribute('data-story-id');
             var nodeId = regenImageBtn.getAttribute('data-node-id');
             var existingUrl = regenImageBtn.getAttribute('data-existing-image');
@@ -700,6 +886,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     story_id: storyId,
                     node_id: nodeId,
                     key_id: keyId,
+                    steer_prompt: steerPrompt,
                     _csrf_token: csrfValue
                 })
             })
@@ -851,24 +1038,36 @@ document.addEventListener('DOMContentLoaded', function () {
             });
         }
 
-        // Provider dropdown auto-fills base URL
-        var providerSelect = document.getElementById('key-provider');
-        var baseUrlInput = document.getElementById('key-base-url');
-        if (providerSelect && baseUrlInput) {
-            var defaultUrls = {
-                openai: 'https://api.openai.com/v1',
-                anthropic: 'https://api.anthropic.com',
-                ollama: 'http://localhost:11434/v1',
-                custom: ''
-            };
-            providerSelect.addEventListener('change', function () {
-                var url = defaultUrls[this.value] || '';
-                if (baseUrlInput.value === '' || Object.values(defaultUrls).indexOf(baseUrlInput.value) !== -1) {
-                    baseUrlInput.value = url;
-                }
-            });
-        }
     }
+
+    function setupApiProviderDefaults(providerSelect, baseUrlInput) {
+        if (!providerSelect || !baseUrlInput) return;
+
+        var defaultUrls = {
+            openai: 'https://api.openai.com/v1',
+            anthropic: 'https://api.anthropic.com',
+            ollama: 'http://localhost:11434/v1',
+            custom: ''
+        };
+
+        providerSelect.addEventListener('change', function () {
+            var url = defaultUrls[this.value] || '';
+            if (baseUrlInput.value === '' || Object.values(defaultUrls).indexOf(baseUrlInput.value) !== -1) {
+                baseUrlInput.value = url;
+            }
+        });
+
+        baseUrlInput.addEventListener('blur', function () {
+            if (providerSelect.value === 'ollama') {
+                var v = this.value.replace(/\/+$/, '');
+                if (v !== '' && !v.endsWith('/v1')) {
+                    this.value = v + '/v1';
+                }
+            }
+        });
+    }
+
+    setupApiProviderDefaults(document.getElementById('key-provider'), document.getElementById('key-base-url'));
 
     /* ==================================================================
      * Settings — API Key Management
@@ -877,45 +1076,229 @@ document.addEventListener('DOMContentLoaded', function () {
     var addKeyForm = document.getElementById('sw-add-key-form');
     if (addKeyForm) {
         var keyFormStatus = document.getElementById('sw-key-form-status');
-        var csrfToken = document.querySelector('meta[name="csrf-token"]');
-        var csrf = csrfToken ? csrfToken.getAttribute('content') : '';
-        var baseUrl = window.location.pathname.replace(/\/settings\.php.*/, '');
+        var headingEl = document.getElementById('sw-key-form-heading');
+        var keyIdInput = document.getElementById('key-id');
+        var keyLabelInput = document.getElementById('key-label');
+        var providerInput = document.getElementById('key-provider');
+        var baseUrlInput = document.getElementById('key-base-url');
+        var apiKeyInput = document.getElementById('key-api-key');
+        var apiKeyNote = document.getElementById('sw-key-api-key-note');
+        var textModelInput = document.getElementById('key-model-text');
+        var imageModelInput = document.getElementById('key-model-image');
+        var textModelSelect = document.getElementById('key-model-text-select');
+        var imageModelSelect = document.getElementById('key-model-image-select');
+        var scopeInput = document.getElementById('key-scope');
+        var fallbackInput = document.getElementById('key-fallback');
+        var submitBtn = document.getElementById('sw-key-submit-btn');
+        var cancelEditBtn = document.getElementById('sw-key-cancel-edit');
+        var fetchModelsBtn = document.getElementById('sw-fetch-models-btn');
+
+        function setKeyFormStatus(message, isError) {
+            if (!keyFormStatus) return;
+            keyFormStatus.textContent = message || '';
+            keyFormStatus.className = 'sw-editor-status' + (isError ? ' sw-editor-status-error' : '');
+        }
+
+        function resetModelSelect(selectEl, placeholder) {
+            if (!selectEl) return;
+            selectEl.innerHTML = '';
+            var option = document.createElement('option');
+            option.value = '';
+            option.textContent = placeholder;
+            selectEl.appendChild(option);
+            selectEl.disabled = true;
+        }
+
+        function clearModelSelects() {
+            resetModelSelect(textModelSelect, 'Choose from fetched models…');
+            resetModelSelect(imageModelSelect, 'Choose from fetched models…');
+        }
+
+        function populateModelSelect(selectEl, models, currentValue) {
+            if (!selectEl) return;
+            resetModelSelect(selectEl, 'Choose from fetched models…');
+            models.forEach(function (model) {
+                var option = document.createElement('option');
+                option.value = model;
+                option.textContent = model;
+                if (model === currentValue) {
+                    option.selected = true;
+                }
+                selectEl.appendChild(option);
+            });
+            selectEl.disabled = models.length === 0;
+        }
+
+        function applyFetchedModels(models) {
+            populateModelSelect(textModelSelect, models, textModelInput.value.trim());
+            populateModelSelect(imageModelSelect, models, imageModelInput.value.trim());
+            setKeyFormStatus(models.length > 0 ? 'Models loaded.' : 'No models were returned.', false);
+        }
+
+        function enterCreateMode() {
+            addKeyForm.dataset.mode = 'create';
+            addKeyForm.reset();
+            keyIdInput.value = '';
+            apiKeyInput.disabled = false;
+            apiKeyInput.value = '';
+            apiKeyInput.placeholder = 'sk-...';
+            if (apiKeyNote) {
+                apiKeyNote.textContent = 'Not needed for local Ollama.';
+            }
+            if (headingEl) headingEl.textContent = 'Add New Key';
+            if (submitBtn) submitBtn.textContent = 'Add Key';
+            if (cancelEditBtn) cancelEditBtn.hidden = true;
+            clearModelSelects();
+            setKeyFormStatus('', false);
+            providerInput.dispatchEvent(new Event('change'));
+        }
+
+        function enterEditMode(keyData) {
+            addKeyForm.dataset.mode = 'edit';
+            keyIdInput.value = keyData.id || '';
+            keyLabelInput.value = keyData.label || '';
+            providerInput.value = keyData.provider || 'openai';
+            baseUrlInput.value = keyData.base_url || '';
+            apiKeyInput.value = '';
+            apiKeyInput.disabled = true;
+            apiKeyInput.placeholder = 'Stored securely';
+            textModelInput.value = keyData.model_text || '';
+            imageModelInput.value = keyData.model_image || '';
+            scopeInput.value = keyData.scope || 'self';
+            if (fallbackInput) {
+                fallbackInput.value = keyData.fallback_key_id || '';
+            }
+            if (apiKeyNote) {
+                apiKeyNote.textContent = 'Stored securely. The existing secret is kept as-is.';
+            }
+            if (headingEl) headingEl.textContent = 'Edit API Key';
+            if (submitBtn) submitBtn.textContent = 'Save Changes';
+            if (cancelEditBtn) cancelEditBtn.hidden = false;
+            clearModelSelects();
+            setKeyFormStatus('Editing "' + (keyData.label || 'API key') + '".', false);
+        }
+
+        function buildKeyPayload() {
+            var payload = {
+                key_id: keyIdInput.value,
+                label: keyLabelInput.value.trim(),
+                provider: providerInput.value,
+                base_url: baseUrlInput.value.trim(),
+                model_text: textModelInput.value.trim(),
+                model_image: imageModelInput.value.trim(),
+                scope: scopeInput.value,
+                fallback_key_id: fallbackInput ? (fallbackInput.value || '') : '',
+                _csrf_token: csrfValue
+            };
+
+            if (addKeyForm.dataset.mode !== 'edit') {
+                payload.api_key = apiKeyInput.value;
+            }
+
+            return payload;
+        }
+
+        clearModelSelects();
+        enterCreateMode();
+
+        [textModelSelect, imageModelSelect].forEach(function (selectEl) {
+            if (!selectEl) return;
+            selectEl.addEventListener('change', function () {
+                var target = selectEl === textModelSelect ? textModelInput : imageModelInput;
+                if (selectEl.value) {
+                    target.value = selectEl.value;
+                }
+            });
+        });
+
+        [providerInput, baseUrlInput, apiKeyInput].forEach(function (el) {
+            if (!el) return;
+            el.addEventListener('change', clearModelSelects);
+            el.addEventListener('input', clearModelSelects);
+        });
+
+        if (providerInput && apiKeyNote) {
+            providerInput.addEventListener('change', function () {
+                if (addKeyForm.dataset.mode === 'edit') {
+                    apiKeyNote.textContent = 'Stored securely. The existing secret is kept as-is.';
+                    return;
+                }
+                apiKeyNote.textContent = providerInput.value === 'ollama'
+                    ? 'Not needed for local Ollama.'
+                    : 'Stored securely after you save it.';
+            });
+        }
+
+        if (cancelEditBtn) {
+            cancelEditBtn.addEventListener('click', function () {
+                enterCreateMode();
+            });
+        }
+
+        if (fetchModelsBtn) {
+            fetchModelsBtn.addEventListener('click', function () {
+                fetchModelsBtn.disabled = true;
+                setKeyFormStatus('Loading models…', false);
+
+                var payload;
+                if (addKeyForm.dataset.mode === 'edit' && keyIdInput.value) {
+                    payload = { key_id: keyIdInput.value, _csrf_token: csrfValue };
+                } else {
+                    payload = {
+                        provider: providerInput.value,
+                        base_url: baseUrlInput.value.trim(),
+                        api_key: apiKeyInput.value,
+                        _csrf_token: csrfValue
+                    };
+                }
+
+                fetch(apiBase + '/api.php?action=list_api_models', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                })
+                .then(function (res) { return res.json(); })
+                .then(function (data) {
+                    if (!data.ok) {
+                        setKeyFormStatus('Error: ' + (data.error || 'Model listing failed'), true);
+                        return;
+                    }
+                    applyFetchedModels(data.models || []);
+                })
+                .catch(function (err) {
+                    setKeyFormStatus('Error: ' + err.message, true);
+                })
+                .finally(function () {
+                    fetchModelsBtn.disabled = false;
+                });
+            });
+        }
 
         addKeyForm.addEventListener('submit', function (e) {
             e.preventDefault();
-            if (keyFormStatus) keyFormStatus.textContent = 'Saving…';
+            setKeyFormStatus(addKeyForm.dataset.mode === 'edit' ? 'Saving changes…' : 'Saving…', false);
 
-            var payload = {
-                label: document.getElementById('key-label').value,
-                provider: document.getElementById('key-provider').value,
-                base_url: document.getElementById('key-base-url').value,
-                api_key: document.getElementById('key-api-key').value,
-                model_text: document.getElementById('key-model-text').value,
-                model_image: document.getElementById('key-model-image').value,
-                scope: document.getElementById('key-scope').value,
-                _csrf_token: csrf
-            };
-
-            fetch(baseUrl + '/api.php?action=save_api_key', {
+            var action = addKeyForm.dataset.mode === 'edit' ? 'update_api_key' : 'save_api_key';
+            fetch(apiBase + '/api.php?action=' + action, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                body: JSON.stringify(buildKeyPayload())
             })
             .then(function (res) { return res.json(); })
             .then(function (data) {
                 if (data.ok) {
-                    if (keyFormStatus) keyFormStatus.textContent = 'Key saved ✓';
-                    setTimeout(function () { window.location.reload(); }, 500);
+                    setKeyFormStatus(addKeyForm.dataset.mode === 'edit' ? 'Key updated ✓' : 'Key saved ✓', false);
+                    setTimeout(function () { window.location.reload(); }, 400);
                 } else {
-                    if (keyFormStatus) keyFormStatus.textContent = 'Error: ' + (data.error || 'Save failed');
+                    setKeyFormStatus('Error: ' + (data.error || 'Save failed'), true);
                 }
             })
             .catch(function (err) {
-                if (keyFormStatus) keyFormStatus.textContent = 'Error: ' + err.message;
+                setKeyFormStatus('Error: ' + err.message, true);
             });
         });
 
-        // Test, Deactivate, Reactivate, Delete buttons (delegated)
+        // Edit, Test, Deactivate, Reactivate, Delete buttons (delegated)
         document.addEventListener('click', function (e) {
             var btn = e.target.closest('[data-key-id]');
             if (!btn) return;
@@ -923,6 +1306,16 @@ document.addEventListener('DOMContentLoaded', function () {
             var keyId = btn.dataset.keyId;
             var action = null;
 
+            if (btn.classList.contains('sw-key-edit')) {
+                var keyItem = btn.closest('.sw-key-item');
+                if (!keyItem || !keyItem.dataset.key) return;
+                try {
+                    enterEditMode(JSON.parse(keyItem.dataset.key));
+                } catch (err) {
+                    setKeyFormStatus('Error: Could not load key details for editing.', true);
+                }
+                return;
+            }
             if (btn.classList.contains('sw-key-test')) action = 'test_api_key';
             else if (btn.classList.contains('sw-key-deactivate')) action = 'deactivate_api_key';
             else if (btn.classList.contains('sw-key-reactivate')) action = 'reactivate_api_key';
@@ -934,10 +1327,10 @@ document.addEventListener('DOMContentLoaded', function () {
             btn.disabled = true;
             btn.textContent = '…';
 
-            fetch(baseUrl + '/api.php?action=' + action, {
+            fetch(apiBase + '/api.php?action=' + action, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ key_id: keyId, _csrf_token: csrf })
+                body: JSON.stringify({ key_id: keyId, _csrf_token: csrfValue })
             })
             .then(function (res) { return res.json(); })
             .then(function (data) {
@@ -1133,7 +1526,8 @@ document.addEventListener('DOMContentLoaded', function () {
      * ================================================================*/
 
     var editorContainer = document.getElementById('sw-editor');
-    if (!editorContainer) return; // Not on edit page
+
+    if (editorContainer) {
 
     var toolbar = document.getElementById('sw-editor-toolbar');
     var saveBtn = document.getElementById('sw-editor-save');
@@ -1345,9 +1739,87 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     });
 
+    }  // end if (editorContainer)
+
     /* ================================================================
      * Story theme picker
      * ================================================================ */
+    const storyScenarioBtn = document.getElementById('sw-save-story-scenario-btn');
+    if (storyScenarioBtn) {
+        storyScenarioBtn.addEventListener('click', async function () {
+            const scenarioInput = document.getElementById('sw-story-scenario-input');
+            const scenarioDetails = document.getElementById('sw-story-scenario-details');
+            const status = document.getElementById('sw-story-scenario-status');
+            const storyId = scenarioInput?.dataset.storyId;
+
+            if (!scenarioInput || !storyId) {
+                return;
+            }
+
+            storyScenarioBtn.disabled = true;
+            if (status) {
+                status.textContent = 'Saving…';
+                status.className = 'sw-editor-status';
+            }
+
+            try {
+                const resp = await fetch(apiBase + '/api.php?action=update_story_scenario', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        _csrf_token: csrfValue,
+                        story_id: storyId,
+                        scenario_essentials: scenarioInput.value
+                    })
+                });
+                const data = await resp.json();
+                if (data.ok) {
+                    scenarioInput.dataset.originalValue = scenarioInput.value;
+                    if (status) {
+                        status.textContent = '';
+                        status.className = 'sw-editor-status';
+                    }
+                    if (scenarioDetails) {
+                        scenarioDetails.open = false;
+                    }
+                    showFlash(data.message || 'Scenario Essentials saved.', 'success');
+                } else {
+                    if (status) {
+                        status.textContent = data.error || 'Failed to save Scenario Essentials.';
+                        status.className = 'sw-editor-status sw-editor-status-error';
+                    }
+                }
+            } catch (err) {
+                if (status) {
+                    status.textContent = 'Error: ' + err.message;
+                    status.className = 'sw-editor-status sw-editor-status-error';
+                }
+            } finally {
+                storyScenarioBtn.disabled = false;
+            }
+        });
+    }
+
+    const storyScenarioCancelBtn = document.getElementById('sw-cancel-story-scenario-btn');
+    if (storyScenarioCancelBtn) {
+        storyScenarioCancelBtn.addEventListener('click', function () {
+            const scenarioInput = document.getElementById('sw-story-scenario-input');
+            const scenarioDetails = document.getElementById('sw-story-scenario-details');
+            const status = document.getElementById('sw-story-scenario-status');
+
+            if (scenarioInput) {
+                scenarioInput.value = scenarioInput.dataset.originalValue || '';
+            }
+            if (status) {
+                status.textContent = '';
+                status.className = 'sw-editor-status';
+            }
+            if (scenarioDetails) {
+                scenarioDetails.open = false;
+            }
+        });
+    }
+
     const storyThemeBtn = document.getElementById('sw-apply-story-theme-btn');
     if (storyThemeBtn) {
         storyThemeBtn.addEventListener('click', async function () {
@@ -1378,6 +1850,133 @@ document.addEventListener('DOMContentLoaded', function () {
                 storyThemeBtn.disabled = false;
                 storyThemeBtn.textContent = 'Apply';
             }
+        });
+    }
+
+    /* ==================================================================
+     * Admin — Prompt Preview
+     * ================================================================*/
+
+    console.log('[SW] Registering preview-prompt click handler');
+
+    function handlePreviewPromptClick(btn) {
+        console.log('[SW] preview-prompt click fired, storyId=', btn.dataset.storyId, 'nodeId=', btn.dataset.nodeId);
+
+        var storyId = btn.dataset.storyId;
+        var nodeId  = btn.dataset.nodeId;
+
+        var customChoiceInput = document.querySelector('.sw-custom-choice [name="custom_choice"]');
+        var pendingChoice = document.querySelector('.sw-choice-pending');
+        var continueBtn = document.getElementById('sw-ai-continue-btn');
+        var choiceText = customChoiceInput && customChoiceInput.value.trim() !== ''
+            ? customChoiceInput.value.trim()
+            : pendingChoice
+                ? (pendingChoice.dataset.choiceText || pendingChoice.textContent.trim())
+                : continueBtn
+                    ? 'Continue the story'
+                    : '(example choice)';
+
+        btn.disabled = true;
+        btn.textContent = '🔍 Loading\u2026';
+
+        fetch('api.php?action=preview_prompt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                story_id:        storyId,
+                parent_node_id:  nodeId,
+                choice_text:     choiceText,
+                _csrf_token:     csrfValue
+            })
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            btn.disabled = false;
+            btn.textContent = '\uD83D\uDD0D Preview Prompts';
+            if (!data.ok) {
+                showFlash(data.error || 'Preview failed.', 'error');
+                return;
+            }
+            showPromptPreviewModal(data);
+        })
+        .catch(function (err) {
+            btn.disabled = false;
+            btn.textContent = '\uD83D\uDD0D Preview Prompts';
+            showFlash('Error: ' + err.message, 'error');
+        });
+    }
+
+    // Direct binding (primary — works when button is present at load time)
+    var previewBtn = document.getElementById('sw-preview-prompt-btn');
+    if (previewBtn) {
+        previewBtn.addEventListener('click', function () {
+            handlePreviewPromptClick(this);
+        });
+        console.log('[SW] preview-prompt button found and bound directly');
+    }
+
+    // Capture-phase delegation (fallback — fires before any stopPropagation)
+    document.addEventListener('click', function (e) {
+        var btn = e.target;
+        while (btn && btn.nodeType === 1) {
+            if (btn.id === 'sw-preview-prompt-btn') break;
+            btn = btn.parentElement;
+        }
+        if (!btn || btn.id !== 'sw-preview-prompt-btn') return;
+        handlePreviewPromptClick(btn);
+    }, true); // capture phase
+
+    function showPromptPreviewModal(data) {
+        var existing = document.getElementById('sw-prompt-preview-modal');
+        if (existing) existing.remove();
+
+        function esc(str) {
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
+
+        var sections = '';
+        if (data.system_prompt) {
+            sections += '<h3 class="sw-prompt-preview-heading">System Prompt</h3>' +
+                        '<pre class="sw-prompt-pre">' + esc(data.system_prompt) + '</pre>';
+        }
+        if (data.story_context) {
+            sections += '<h3 class="sw-prompt-preview-heading">Story Context</h3>' +
+                        '<pre class="sw-prompt-pre">' + esc(data.story_context) + '</pre>';
+        }
+        if (data.image_prompt) {
+            sections += '<h3 class="sw-prompt-preview-heading">Image Prompt</h3>' +
+                        '<pre class="sw-prompt-pre">' + esc(data.image_prompt) + '</pre>';
+        }
+        if (!sections) {
+            sections = '<p class="sw-text-muted">No prompts available for this node.</p>';
+        }
+
+        var modal = document.createElement('div');
+        modal.id = 'sw-prompt-preview-modal';
+        modal.className = 'sw-modal-backdrop sw-modal-open';
+        modal.innerHTML =
+            '<div class="sw-modal sw-prompt-preview-dialog">' +
+                '<div class="sw-modal-header">' +
+                    '<h2>Prompt Preview</h2>' +
+                    '<button type="button" class="sw-modal-close" aria-label="Close">&times;</button>' +
+                '</div>' +
+                '<div class="sw-prompt-preview-body">' + sections + '</div>' +
+            '</div>';
+
+        document.body.appendChild(modal);
+
+        modal.querySelector('.sw-modal-close').addEventListener('click', function () {
+            modal.remove();
+        });
+        modal.addEventListener('click', function (e) {
+            if (e.target === modal) modal.remove();
+        });
+        document.addEventListener('keydown', function onEsc(e) {
+            if (e.key === 'Escape') { modal.remove(); document.removeEventListener('keydown', onEsc); }
         });
     }
 

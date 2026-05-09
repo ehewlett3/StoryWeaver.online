@@ -43,9 +43,10 @@ function node_resolve_path(string $story_id, string $node_id): ?string
  * @param string $title     Story title.
  * @param string $author_id User ID of the creator (or 'anonymous').
  * @param array  $paragraphs Optional initial paragraphs for the root node.
+ * @param array  $node_meta  Optional root-node metadata fields.
  * @return array ['story_id' => string, 'node_id' => string]
  */
-function story_create(string $title, string $author_id = 'anonymous', array $paragraphs = [], array $ai_meta = []): array
+function story_create(string $title, string $author_id = 'anonymous', array $paragraphs = [], array $node_meta = []): array
 {
     $story_id = generate_id('story_');
     $story_dir = STORIES_DIR . '/' . $story_id;
@@ -61,7 +62,7 @@ function story_create(string $title, string $author_id = 'anonymous', array $par
         'title'        => $title,
         'paragraphs'   => $paragraphs ?: ['Begin your story here…'],
         'choices'      => [],
-    ], $ai_meta));
+    ], $node_meta));
 
     return ['story_id' => $story_id, 'node_id' => $node_id];
 }
@@ -74,19 +75,25 @@ function story_create(string $title, string $author_id = 'anonymous', array $par
  */
 function story_find_root(string $story_id): ?string
 {
-    $story_dir = STORIES_DIR . '/' . $story_id;
-    if (!is_dir($story_dir)) {
-        return null;
-    }
+    $dirs = [
+        STORIES_DIR . '/' . $story_id,
+        QUARANTINE_DIR . '/' . $story_id,
+    ];
 
-    $files = glob($story_dir . '/node_*.html');
-    foreach ($files as $file) {
-        $html = file_get_contents($file);
-        if ($html === false) continue;
+    foreach ($dirs as $story_dir) {
+        if (!is_dir($story_dir)) {
+            continue;
+        }
 
-        // Root node has empty sw-parent-id
-        if (preg_match('/name="sw-parent-id"\s+content=""/i', $html)) {
-            return basename($file, '.html');
+        $files = glob($story_dir . '/node_*.html');
+        foreach ($files as $file) {
+            $html = file_get_contents($file);
+            if ($html === false) continue;
+
+            // Root node has empty sw-parent-id
+            if (preg_match('/name="sw-parent-id"\s+content=""/i', $html)) {
+                return basename($file, '.html');
+            }
         }
     }
 
@@ -106,8 +113,27 @@ function story_get_title(string $story_id): string
         return $story_id;
     }
 
-    $node = node_read($story_id, $root_id);
+    $node = node_read($story_id, $root_id, true);
     return $node['title'] ?? $story_id;
+}
+
+/**
+ * Append a history entry to an sw_meta array.
+ */
+function node_meta_append_history(array $meta, string $user_id, string $action, string $ai_model = ''): array
+{
+    if (!isset($meta['history']) || !is_array($meta['history'])) {
+        $meta['history'] = [];
+    }
+
+    $meta['history'][] = [
+        'action'   => $action,
+        'by'       => $user_id,
+        'at'       => gmdate('Y-m-d\TH:i:s\Z'),
+        'ai_model' => $ai_model !== '' ? $ai_model : null,
+    ];
+
+    return $meta;
 }
 
 /* ------------------------------------------------------------------
@@ -127,18 +153,20 @@ function story_get_title(string $story_id): string
  *   - title        (string) Story title (used in <title> and breadcrumb).
  *   - paragraphs   (array)  Array of paragraph strings.
  *   - choices      (array)  Array of ['id' => int, 'text' => string, 'node' => string|null].
+ *   - location     (string) Optional 'stories' or 'quarantine' output location.
  * @return string The generated node ID.
  */
 function node_create(string $story_id, array $params): string
 {
     $node_id = generate_id('node_');
+    $location = ($params['location'] ?? 'stories') === 'quarantine' ? 'quarantine' : 'stories';
 
     $html = node_generate_html(array_merge($params, [
         'story_id' => $story_id,
         'node_id'  => $node_id,
     ]));
 
-    node_write_file($story_id, $node_id, $html);
+    node_write_file($story_id, $node_id, $html, $location);
 
     return $node_id;
 }
@@ -174,6 +202,81 @@ function node_read(string $story_id, string $node_id, bool $check_quarantine = f
     }
 
     return node_parse_html($html, $location);
+}
+
+/**
+ * Return true when the current user may access a quarantined story.
+ */
+function story_user_can_access_quarantine(string $story_id, ?array $user): bool
+{
+    if ($user === null) {
+        return false;
+    }
+
+    if (role_level((string) ($user['role'] ?? 'viewer')) >= role_level('editor')) {
+        return true;
+    }
+
+    $root_id = story_find_root($story_id);
+    if ($root_id === null) {
+        return false;
+    }
+
+    $root = node_read($story_id, $root_id, true);
+    if ($root === null) {
+        return false;
+    }
+
+    $user_id = (string) ($user['id'] ?? '');
+    $created_by = (string) (($root['sw_meta']['created_by'] ?? ''));
+
+    return $user_id !== '' && (
+        ($root['author_id'] ?? '') === $user_id
+        || $created_by === $user_id
+    );
+}
+
+/**
+ * Return true when the current user may access a quarantined node.
+ */
+function node_user_can_access_quarantine(string $story_id, array $node, ?array $user): bool
+{
+    if (($node['location'] ?? 'stories') !== 'quarantine') {
+        return true;
+    }
+
+    if ($user === null) {
+        return false;
+    }
+
+    if (role_level((string) ($user['role'] ?? 'viewer')) >= role_level('editor')) {
+        return true;
+    }
+
+    $user_id = (string) ($user['id'] ?? '');
+    if ($user_id !== '' && ($node['author_id'] ?? '') === $user_id) {
+        return true;
+    }
+
+    return story_user_can_access_quarantine($story_id, $user);
+}
+
+/**
+ * Read a node if it is publicly visible or accessible to the given user in quarantine.
+ */
+function node_read_for_user(string $story_id, string $node_id, ?array $user): ?array
+{
+    $node = node_read($story_id, $node_id, false);
+    if ($node !== null) {
+        return $node;
+    }
+
+    $node = node_read($story_id, $node_id, true);
+    if ($node === null) {
+        return null;
+    }
+
+    return node_user_can_access_quarantine($story_id, $node, $user) ? $node : null;
 }
 
 /**
@@ -308,23 +411,15 @@ function node_meta_log(string $story_id, string $node_id, string $user_id, strin
     $html = file_get_contents($path);
     if ($html === false) return;
 
-    $entry = [
-        'action'   => $action,
-        'by'       => $user_id,
-        'at'       => gmdate('Y-m-d\TH:i:s\Z'),
-        'ai_model' => $ai_model ?: null,
-    ];
-
     if (preg_match('/<!-- sw-meta: ({.*?}) -->/s', $html, $m)) {
         $meta = json_decode($m[1], true);
         if (!is_array($meta)) $meta = [];
-        if (!isset($meta['history'])) $meta['history'] = [];
-        $meta['history'][] = $entry;
+        $meta = node_meta_append_history($meta, $user_id, $action, $ai_model);
         $new_comment = '<!-- sw-meta: ' . json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ' -->';
         $html = str_replace($m[0], $new_comment, $html);
     } else {
         // No existing meta — inject one after <head>
-        $meta = ['history' => [$entry]];
+        $meta = node_meta_append_history([], $user_id, $action, $ai_model);
         $new_comment = '<!-- sw-meta: ' . json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ' -->';
         $html = preg_replace('/<head>/', "<head>\n  " . $new_comment, $html, 1);
     }
@@ -385,11 +480,56 @@ function node_update_choices(string $story_id, string $node_id, array $choices):
         'choices'      => $choices,
         'created_at'   => $node['created_at'],
         'flagged'      => $node['flagged'],
+        'sw_meta'      => $node['sw_meta'] ?? null,
     ]);
 
     $path = node_resolve_path($story_id, $node_id)
          ?? STORIES_DIR . '/' . $story_id . '/' . $node_id . '.html';
     atomic_write($path, $html);
+    return true;
+}
+
+/**
+ * Replace a node's paragraphs, choices, and metadata in one write.
+ */
+function node_replace_content(string $story_id, string $node_id, array $paragraphs, array $choices, array $sw_meta): bool
+{
+    $node = node_read($story_id, $node_id, true);
+    if ($node === null) {
+        return false;
+    }
+
+    $html = node_generate_html([
+        'story_id'     => $node['story_id'],
+        'node_id'      => $node['node_id'],
+        'parent_id'    => $node['parent_id'],
+        'choice_taken' => $node['choice_taken'],
+        'author_id'    => $node['author_id'],
+        'title'        => $node['title'],
+        'paragraphs'   => $paragraphs,
+        'choices'      => $choices,
+        'created_at'   => $node['created_at'],
+        'flagged'      => $node['flagged'],
+        'sw_meta'      => $sw_meta,
+    ]);
+
+    $path = node_resolve_path($story_id, $node_id)
+         ?? STORIES_DIR . '/' . $story_id . '/' . $node_id . '.html';
+    atomic_write($path, $html);
+    return true;
+}
+
+/**
+ * Return true when a node can be safely regenerated in place.
+ */
+function node_can_regenerate(array $node): bool
+{
+    foreach (($node['choices'] ?? []) as $choice) {
+        if (!empty($choice['node'])) {
+            return false;
+        }
+    }
+
     return true;
 }
 
@@ -447,14 +587,16 @@ function node_link_choice(string $story_id, string $parent_node_id, string $choi
  *
  * Creates the story directory if it doesn't exist.
  *
- * @param string $story_id Story ID.
- * @param string $node_id  Node ID.
- * @param string $html     Complete HTML content.
+ * @param string $story_id  Story ID.
+ * @param string $node_id   Node ID.
+ * @param string $html      Complete HTML content.
+ * @param string $location  Output location: stories or quarantine.
  * @return void
  */
-function node_write_file(string $story_id, string $node_id, string $html): void
+function node_write_file(string $story_id, string $node_id, string $html, string $location = 'stories'): void
 {
-    $dir = STORIES_DIR . '/' . $story_id;
+    $base_dir = $location === 'quarantine' ? QUARANTINE_DIR : STORIES_DIR;
+    $dir = $base_dir . '/' . $story_id;
     if (!is_dir($dir)) {
         mkdir($dir, 0755, true);
     }
@@ -494,6 +636,8 @@ function node_path(string $story_id, string $node_id): string
  *   - ai_model     (string) Optional AI model used for generation.
  *   - ai_provider  (string) Optional AI provider name.
  *   - ai_key_label (string) Optional AI key label.
+ *   - scenario_essentials (string) Optional story-wide scenario text.
+ *   - sw_meta      (array)  Optional complete metadata block to preserve.
  * @return string Complete HTML document.
  */
 function node_generate_html(array $params): string
@@ -515,24 +659,30 @@ function node_generate_html(array $params): string
     $ai_key_label = $params['ai_key_label'] ?? '';
 
     // Build metadata comment block
-    $meta_log = [
-        'created_by' => $author_id,
-        'created_at' => $created_at,
-    ];
-    if ($ai_model !== '') {
-        $meta_log['ai_generated'] = true;
-        $meta_log['ai_model'] = $ai_model;
-        $meta_log['ai_provider'] = $ai_provider;
-        $meta_log['ai_key_label'] = $ai_key_label;
+    $meta_log = $params['sw_meta'] ?? null;
+    if (!is_array($meta_log)) {
+        $meta_log = [
+            'created_by' => $author_id,
+            'created_at' => $created_at,
+        ];
+        if (!empty($params['scenario_essentials'])) {
+            $meta_log['scenario_essentials'] = (string) $params['scenario_essentials'];
+        }
+        if ($ai_model !== '') {
+            $meta_log['ai_generated'] = true;
+            $meta_log['ai_model'] = $ai_model;
+            $meta_log['ai_provider'] = $ai_provider;
+            $meta_log['ai_key_label'] = $ai_key_label;
+        }
+        $meta_log['history'] = [
+            [
+                'action' => 'created',
+                'by'     => $author_id,
+                'at'     => $created_at,
+                'ai_model' => $ai_model ?: null,
+            ],
+        ];
     }
-    $meta_log['history'] = [
-        [
-            'action' => 'created',
-            'by'     => $author_id,
-            'at'     => $created_at,
-            'ai_model' => $ai_model ?: null,
-        ],
-    ];
     $meta_comment = '<!-- sw-meta: ' . json_encode($meta_log, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ' -->';
 
     // Active theme for the CSS link
@@ -643,18 +793,149 @@ HTML;
  */
 function sanitize_paragraph_html(string $html): string
 {
-    // Strip all tags except allowed formatting tags
-    $allowed = '<b><i><em><strong><a><br><u>';
-    $clean = strip_tags($html, $allowed);
+    $html = trim($html);
+    if ($html === '') {
+        return '';
+    }
 
-    // Remove any event handler attributes (onclick, onerror, etc.)
-    $clean = preg_replace('/\s+on\w+\s*=\s*["\'][^"\']*["\']/i', '', $clean);
-    $clean = preg_replace('/\s+on\w+\s*=\s*\S+/i', '', $clean);
+    if (!class_exists('DOMDocument')) {
+        error_log('StoryWeaver DOM extension is unavailable; sanitizing paragraphs as plain text.');
+        return nl2br(h(strip_tags($html)), false);
+    }
 
-    // Remove javascript: URLs from <a> tags
-    $clean = preg_replace('/href\s*=\s*["\']javascript:[^"\']*["\']/i', 'href="#"', $clean);
+    $dom = new DOMDocument('1.0', 'UTF-8');
+    $wrapped = '<div>' . $html . '</div>';
+
+    $previous = libxml_use_internal_errors(true);
+    $loaded = $dom->loadHTML('<?xml encoding="utf-8" ?>' . $wrapped, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+    libxml_clear_errors();
+    libxml_use_internal_errors($previous);
+
+    if (!$loaded) {
+        return '';
+    }
+
+    $root = $dom->getElementsByTagName('div')->item(0);
+    if (!$root instanceof DOMElement) {
+        return '';
+    }
+
+    $allowed = [
+        'a' => ['href'],
+        'b' => [],
+        'br' => [],
+        'em' => [],
+        'i' => [],
+        'strong' => [],
+        'u' => [],
+    ];
+
+    sanitize_paragraph_node($root, $allowed);
+
+    $clean = '';
+    foreach (iterator_to_array($root->childNodes) as $child) {
+        $clean .= $dom->saveHTML($child);
+    }
 
     return trim($clean);
+}
+
+/**
+ * Recursively sanitize a DOM fragment against the paragraph allowlist.
+ *
+ * @param DOMNode $node
+ * @param array<string, array<int, string>> $allowed
+ */
+function sanitize_paragraph_node(DOMNode $node, array $allowed): void
+{
+    if (in_array($node->nodeType, [XML_COMMENT_NODE, XML_PI_NODE], true)) {
+        if ($node->parentNode !== null) {
+            $node->parentNode->removeChild($node);
+        }
+        return;
+    }
+
+    $children = [];
+    foreach ($node->childNodes as $child) {
+        $children[] = $child;
+    }
+
+    foreach ($children as $child) {
+        sanitize_paragraph_node($child, $allowed);
+
+        if ($child->nodeType !== XML_ELEMENT_NODE) {
+            continue;
+        }
+
+        $tag = strtolower($child->nodeName);
+        if (!isset($allowed[$tag])) {
+            if (in_array($tag, ['script', 'style', 'iframe', 'object', 'embed', 'svg', 'math', 'template'], true)) {
+                $node->removeChild($child);
+                continue;
+            }
+
+            while ($child->firstChild !== null) {
+                $node->insertBefore($child->firstChild, $child);
+            }
+            $node->removeChild($child);
+            continue;
+        }
+
+        if (!$child instanceof DOMElement || !$child->hasAttributes()) {
+            continue;
+        }
+
+        $attribute_names = [];
+        foreach ($child->attributes as $attribute) {
+            $attribute_names[] = $attribute->nodeName;
+        }
+
+        foreach ($attribute_names as $attribute_name) {
+            if (!in_array(strtolower($attribute_name), $allowed[$tag], true)) {
+                $child->removeAttribute($attribute_name);
+            }
+        }
+
+        if ($tag === 'a' && $child->hasAttribute('href')) {
+            $href = trim(html_entity_decode($child->getAttribute('href'), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+            if (!is_safe_story_href($href)) {
+                $child->removeAttribute('href');
+            } else {
+                $child->setAttribute('href', $href);
+            }
+        }
+    }
+}
+
+/**
+ * Check whether an anchor href is safe to render in story content.
+ */
+function is_safe_story_href(string $href): bool
+{
+    if ($href === '') {
+        return false;
+    }
+
+    $decoded = html_entity_decode($href, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    $collapsed = preg_replace('/[\x00-\x20\x7F]+/u', '', $decoded);
+    if (!is_string($collapsed) || $collapsed === '') {
+        return false;
+    }
+
+    if (str_starts_with($collapsed, '#')
+        || str_starts_with($collapsed, '/')
+        || str_starts_with($collapsed, '?')
+        || str_starts_with($collapsed, './')
+        || str_starts_with($collapsed, '../')) {
+        return true;
+    }
+
+    $scheme = parse_url($collapsed, PHP_URL_SCHEME);
+    if ($scheme === null) {
+        return true;
+    }
+
+    return in_array(strtolower($scheme), ['http', 'https', 'mailto'], true);
 }
 
 /**

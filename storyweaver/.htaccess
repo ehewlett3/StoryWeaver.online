@@ -4,7 +4,7 @@
 # ----------------------------------------------------------------------
 
 Options -Indexes
-DirectoryIndex index.php
+DirectoryIndex index.php index.html
 
 # Block access to private data directories
 <IfModule mod_rewrite.c>
@@ -21,6 +21,17 @@ DirectoryIndex index.php
 
   # Deny access to _lib/
   RewriteRule ^_lib/ - [F,L]
+
+  # Serve extensionless .php and .html URLs for public app pages.
+  RewriteCond %{REQUEST_FILENAME} -d [OR]
+  RewriteCond %{REQUEST_FILENAME} -f
+  RewriteRule ^ - [L]
+
+  RewriteCond %{REQUEST_FILENAME}.php -f
+  RewriteRule ^(.+?)/?$ $1.php [L]
+
+  RewriteCond %{REQUEST_FILENAME}.html -f
+  RewriteRule ^(.+?)/?$ $1.html [L]
 </IfModule>
 
 # Fallback for servers without mod_rewrite — nested .htaccess files

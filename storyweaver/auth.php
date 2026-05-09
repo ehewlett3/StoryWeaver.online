@@ -137,7 +137,7 @@ function handle_setup(): void
             </div>
         </div>
         <?php
-    }, false); // no nav on setup page
+    }, true, 'setup');
 }
 
 /**
@@ -209,7 +209,7 @@ function handle_login(): void
             </div>
         </div>
         <?php
-    }, false); // no nav on login page
+    }, true, 'login');
 }
 
 /**
@@ -217,10 +217,14 @@ function handle_login(): void
  */
 function handle_logout(): void
 {
+    if (!is_post()) {
+        redirect(base_url() . '/index.php');
+    }
+
+    csrf_check();
     auth_logout();
     // Start a new session for the flash message
-    session_name('storyweaver_session');
-    session_start();
+    sw_start_session();
     flash('info', 'You have been logged out.');
     redirect(base_url() . '/auth.php?action=login');
 }
@@ -234,7 +238,6 @@ function handle_logout(): void
 function handle_reset_request(): void
 {
     $errors = [];
-    $reset_link = null;
     $mail_sent = false;
 
     if (is_post()) {
@@ -271,9 +274,7 @@ function handle_reset_request(): void
                 json_write($mail_dir . '/' . $token . '.json', $token_data);
 
                 // Build the reset link
-                $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-                $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
-                $reset_link = $protocol . '://' . $host . base_url()
+                $reset_link = request_origin() . base_url()
                             . '/auth.php?action=reset&token=' . urlencode($token);
 
                 // Attempt to send email
@@ -282,27 +283,24 @@ function handle_reset_request(): void
                       . "You requested a password reset. Click the link below (valid for 1 hour):\n\n"
                       . $reset_link . "\n\n"
                       . "If you did not request this, you can safely ignore this email.\n";
-                $headers = 'From: noreply@' . $host . "\r\n"
+                $headers = 'From: ' . mail_from_address() . "\r\n"
                          . 'Content-Type: text/plain; charset=UTF-8' . "\r\n";
 
                 if (function_exists('mail')) {
                     $mail_sent = @mail($user['email'], $subject, $body, $headers);
                 }
+
+                if (!$mail_sent) {
+                    error_log('StoryWeaver password reset email could not be delivered for user ' . $user['id'] . '.');
+                }
             }
 
             // Show success regardless (prevent enumeration)
             flash('success', 'If an account with that email exists, a reset link has been sent.');
-
-            // If mail() failed or unavailable, show the link on screen
-            if ($user !== null && !$mail_sent && $reset_link !== null) {
-                // We'll display the link — this is the graceful degradation path
-            } else {
-                $reset_link = null; // Don't show link if mail was sent
-            }
         }
     }
 
-    render_page('Reset Password', function () use ($errors, $reset_link) {
+    render_page('Reset Password', function () use ($errors) {
         ?>
         <div class="sw-auth-page">
             <div class="sw-auth-card">
@@ -311,14 +309,6 @@ function handle_reset_request(): void
 
                 <?php render_errors($errors); ?>
                 <?php render_flashes(); ?>
-
-                <?php if ($reset_link !== null): ?>
-                    <div class="sw-flash sw-flash-warning">
-                        <strong>⚠️ Email could not be sent.</strong><br>
-                        Use this link to reset your password (valid for 1 hour):<br>
-                        <a href="<?= h($reset_link) ?>" style="word-break: break-all;"><?= h($reset_link) ?></a>
-                    </div>
-                <?php endif; ?>
 
                 <form method="POST" action="<?= h(base_url()) ?>/auth.php?action=reset_request">
                     <?= csrf_field() ?>
@@ -340,7 +330,7 @@ function handle_reset_request(): void
             </div>
         </div>
         <?php
-    }, false);
+    }, true, 'login');
 }
 
 /**
@@ -389,7 +379,7 @@ function handle_reset(): void
                 </div>
             </div>
             <?php
-        }, false);
+        }, true, 'login');
         return;
     }
 
@@ -454,7 +444,7 @@ function handle_reset(): void
             </div>
         </div>
         <?php
-    }, false);
+    }, true, 'login');
 }
 
 /**
@@ -559,7 +549,7 @@ function handle_register(): void
             </div>
         </div>
         <?php
-    }, false);
+    }, true, 'register');
 }
 
 /* ======================================================================
@@ -572,9 +562,10 @@ function handle_register(): void
  * @param string   $title    Page title.
  * @param callable $body     Callback that outputs the page body content.
  * @param bool     $show_nav Whether to show the navigation bar.
+ * @param string   $nav_active Active top-nav item ID.
  * @return void
  */
-function render_page(string $title, callable $body, bool $show_nav = true): void
+function render_page(string $title, callable $body, bool $show_nav = true, string $nav_active = ''): void
 {
     $base = base_url();
     $user = $show_nav ? current_user() : null;
@@ -587,26 +578,14 @@ function render_page(string $title, callable $body, bool $show_nav = true): void
     <title><?= h($title) ?> — StoryWeaver</title>
     <link rel="stylesheet" href="<?= h($base) ?>/_themes/<?= h(theme_css()) ?>">
 </head>
-<body>
+    <body>
     <?php if ($show_nav): ?>
-    <nav class="sw-nav">
-        <a href="<?= h($base) ?>/index.php" class="sw-nav-brand">🧶 StoryWeaver</a>
-        <ul class="sw-nav-links">
-            <?php if ($user): ?>
-                <li><a href="<?= h($base) ?>/settings.php">⚙️</a></li>
-                <li><span class="sw-nav-user"><?= h($user['username']) ?></span></li>
-                <li><a href="<?= h($base) ?>/auth.php?action=logout">Log out</a></li>
-            <?php else: ?>
-                <li><a href="<?= h($base) ?>/auth.php?action=login">Log in</a></li>
-                <li><a href="<?= h($base) ?>/auth.php?action=register">Register</a></li>
-            <?php endif; ?>
-        </ul>
-    </nav>
+    <?php render_main_nav($user, $nav_active); ?>
     <?php endif; ?>
 
     <?php $body(); ?>
 
-    <script src="<?= h($base) ?>/_assets/sw.js"></script>
+    <script src="<?= h($base) ?>/_assets/sw.js?v=<?= filemtime(sw_root() . '/_assets/sw.js') ?>"></script>
 </body>
 </html>
     <?php

@@ -17,7 +17,7 @@ require_once __DIR__ . '/_lib/moderation.php';
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
 // Set JSON content type for standard API responses
-if (!in_array($action, ['save_theme_css', 'stream_generate_node'], true)) {
+if (!in_array($action, ['save_theme_css', 'stream_generate_node', 'stream_regenerate_node'], true)) {
     header('Content-Type: application/json; charset=UTF-8');
 }
 
@@ -37,11 +37,26 @@ switch ($action) {
     case 'stream_generate_node':
         handle_stream_generate_node();
         break;
+    case 'stream_regenerate_node':
+        handle_stream_regenerate_node();
+        break;
+    case 'regenerate_node':
+        handle_regenerate_node();
+        break;
+    case 'apply_regenerated_node':
+        handle_apply_regenerated_node();
+        break;
     case 'test_api_key':
         handle_test_api_key();
         break;
     case 'save_api_key':
         handle_save_api_key();
+        break;
+    case 'update_api_key':
+        handle_update_api_key();
+        break;
+    case 'list_api_models':
+        handle_list_api_models();
         break;
     case 'deactivate_api_key':
         handle_deactivate_api_key();
@@ -85,11 +100,17 @@ switch ($action) {
     case 'set_story_theme':
         handle_set_story_theme();
         break;
+    case 'update_story_scenario':
+        handle_update_story_scenario();
+        break;
     case 'delete_image':
         handle_delete_image();
         break;
     case 'upload_image':
         handle_upload_image();
+        break;
+    case 'preview_prompt':
+        handle_preview_prompt();
         break;
     default:
         json_error('Unknown action.', 400);
@@ -135,9 +156,8 @@ function handle_save_node_text(): void
         json_error('Paragraphs must be an array.', 400);
     }
 
-    // Read the existing node to check permissions (including quarantine for editors)
-    $check_quarantine = role_level($user['role']) >= role_level('editor');
-    $node = node_read($story_id, $node_id, $check_quarantine);
+    // Read the existing node, including quarantined stories the author may still access
+    $node = node_read_for_user($story_id, $node_id, $user);
     if ($node === null) {
         json_error('Node not found.', 404);
     }
@@ -194,7 +214,7 @@ function handle_generate_node(): void
     $story_id       = $input['story_id'] ?? '';
     $parent_node_id = $input['parent_node_id'] ?? '';
     $choice_text    = trim($input['choice_text'] ?? '');
-    $scenario       = trim($input['scenario_essentials'] ?? '');
+    $scenario       = normalize_scenario_essentials((string) ($input['scenario_essentials'] ?? ''));
     $title          = trim($input['title'] ?? '');
     $key_id         = trim($input['key_id'] ?? '');
 
@@ -208,12 +228,19 @@ function handle_generate_node(): void
         $key_record = api_key_find_by_id($key_id);
         if ($key_record === null || $key_record['status'] !== 'active') {
             $key_record = null;
+        } elseif (($key_error = api_key_access_error($key_record, $user)) !== null) {
+            json_error($key_error, 403);
         }
     } else {
         $key_record = api_key_select_for_user($user_id);
     }
     if ($key_record === null) {
         json_error('No AI key available. Add one in Settings or write manually.', 400);
+    }
+    try {
+        $key_record = api_key_prepare_for_use($key_record);
+    } catch (RuntimeException $e) {
+        json_error($e->getMessage(), 500);
     }
 
     // Is this a new story opening or a continuation?
@@ -227,31 +254,35 @@ function handle_generate_node(): void
         if ($choice_text === '') {
             json_error('Choice text is required.', 400);
         }
-    }
 
-    // Build prompts
-    $system_prompt = get_system_prompt($scenario);
-
-    if ($is_opening) {
-        $user_message = build_opening_prompt($title, $scenario);
+        $parent = node_read_for_user($story_id, $parent_node_id, $user);
+        if ($parent === null) {
+            json_error('Parent page not found.', 404);
+        }
+        $check_quarantine = (($parent['location'] ?? 'stories') === 'quarantine');
     } else {
-        // Reconstruct context from parent chain
-        $entries = reconstruct_context($story_id, $parent_node_id);
-        $entries = truncate_context($entries);
-        $user_message = build_story_prompt($entries, $choice_text);
+        $check_quarantine = false;
+        $parent = null;
     }
 
-    // Call AI with retry on parse failure
-    $provider = new AIProvider($key_record);
-    $parsed = null;
+    $prompt_bundle = $is_opening
+        ? build_opening_prompt_bundle($title, $scenario)
+        : build_continuation_prompt_bundle($story_id, $parent_node_id, $choice_text, $check_quarantine);
+    $system_prompt = $prompt_bundle['system_prompt'];
+    $story_context = $prompt_bundle['story_context'];
+
+    // Call AI with retry on parse failure; fall back to fallback_key_id on connection errors
+    $active_key = $key_record;
+    $provider   = new AIProvider($active_key);
+    $parsed     = null;
     $last_error = '';
+    $raw_response = '';
 
     for ($attempt = 0; $attempt < 2; $attempt++) {
         try {
             if ($attempt === 0) {
-                $raw_response = $provider->generateText($system_prompt, $user_message);
+                $raw_response = $provider->generateText($system_prompt, $story_context);
             } else {
-                // Retry with repair prompt
                 $repair_msg = build_repair_prompt($raw_response);
                 $raw_response = $provider->generateText($system_prompt, $repair_msg);
             }
@@ -264,18 +295,57 @@ function handle_generate_node(): void
         } catch (RuntimeException $e) {
             $last_error = $e->getMessage();
 
-            // On auth failure, mark key unavailable immediately
+            // Auth failures: mark unavailable immediately, no fallback
             if (str_contains($last_error, 'Authentication failed')) {
-                api_key_mark_unavailable($key_record['id'], $last_error);
+                api_key_mark_unavailable($active_key['id'], $last_error);
                 json_error('API key authentication failed and has been deactivated. ' . $last_error, 401);
             }
             break;
         }
     }
 
+    // On connection error, try the fallback key (primary stays active — outage may be transient)
+    if ($parsed === null && api_key_is_connection_error($last_error)) {
+        $fallback = api_key_get_fallback($key_record);
+        if ($fallback !== null) {
+            try {
+                $active_key = api_key_prepare_for_use($fallback);
+            } catch (RuntimeException $e) {
+                json_error($e->getMessage(), 500);
+            }
+            $provider     = new AIProvider($active_key);
+            $last_error   = '';
+            $raw_response = '';
+
+            for ($attempt = 0; $attempt < 2; $attempt++) {
+                try {
+                    if ($attempt === 0) {
+                        $raw_response = $provider->generateText($system_prompt, $story_context);
+                    } else {
+                        $repair_msg = build_repair_prompt($raw_response);
+                        $raw_response = $provider->generateText($system_prompt, $repair_msg);
+                    }
+
+                    $parsed = parse_ai_response($raw_response);
+                    if ($parsed !== null) {
+                        break;
+                    }
+                    $last_error = 'AI response was not valid JSON.';
+                } catch (RuntimeException $e) {
+                    $last_error = $e->getMessage();
+
+                    if (str_contains($last_error, 'Authentication failed')) {
+                        api_key_mark_unavailable($active_key['id'], $last_error);
+                        json_error('API key authentication failed and has been deactivated. ' . $last_error, 401);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
     if ($parsed === null) {
-        // Mark key unavailable after repeated failure
-        api_key_mark_unavailable($key_record['id'], $last_error);
+        api_key_mark_unavailable($active_key['id'], $last_error);
         json_error('AI generation failed: ' . $last_error, 502);
     }
 
@@ -285,7 +355,7 @@ function handle_generate_node(): void
         $paragraphs[] = sanitize_paragraph_html($p);
     }
     if (empty($paragraphs)) {
-        $paragraphs = ['The story continues…'];
+        $paragraphs = [$is_opening ? 'The story begins…' : 'The story continues…'];
     }
 
     // Build choices (all pending — node is null)
@@ -293,7 +363,12 @@ function handle_generate_node(): void
 
     if ($is_opening) {
         // Create new story + root node
-        $result = story_create(h($title), $author_id, $paragraphs);
+        $result = story_create(h($title), $author_id, $paragraphs, [
+            'ai_model'            => $active_key['model_text'] ?? '',
+            'ai_provider'         => $active_key['provider'] ?? '',
+            'ai_key_label'        => $active_key['label'] ?? '',
+            'scenario_essentials' => $prompt_bundle['scenario_essentials'],
+        ]);
         $story_id = $result['story_id'];
         $node_id  = $result['node_id'];
 
@@ -310,6 +385,10 @@ function handle_generate_node(): void
             'title'        => story_get_title($story_id),
             'paragraphs'   => $paragraphs,
             'choices'      => $choices,
+            'ai_model'     => $active_key['model_text'] ?? '',
+            'ai_provider'  => $active_key['provider'] ?? '',
+            'ai_key_label' => $active_key['label'] ?? '',
+            'location'     => (($parent['location'] ?? 'stories') === 'quarantine' ? 'quarantine' : 'stories'),
         ]);
 
         // Link parent's choice to the new child
@@ -322,6 +401,491 @@ function handle_generate_node(): void
         'node_id'  => $node_id,
         'url'      => $base . '/node.php?story=' . urlencode($story_id) . '&id=' . urlencode($node_id),
         'ending'   => $parsed['ending'] ?? false,
+    ]);
+}
+
+/**
+ * Generate a regenerated candidate for an existing node without applying it.
+ *
+ * Expects POST JSON: { story_id, node_id, key_id?, _csrf_token }
+ */
+function handle_regenerate_node(): void
+{
+    $user = current_user();
+    if ($user === null) {
+        json_error('Authentication required.', 401);
+    }
+
+    $input = get_json_input();
+    csrf_check($input['_csrf_token'] ?? '');
+
+    $story_id = trim($input['story_id'] ?? '');
+    $node_id  = trim($input['node_id'] ?? '');
+    $key_id   = trim($input['key_id'] ?? '');
+    $steer_prompt = trim((string) ($input['steer_prompt'] ?? ''));
+
+    if (!validate_id($story_id, 'story_') || !validate_id($node_id, 'node_')) {
+        json_error('Invalid story or page ID.', 400);
+    }
+
+    $node = node_read_for_user($story_id, $node_id, $user);
+    if ($node === null) {
+        json_error('Story node not found.', 404);
+    }
+
+    $can_edit = ($node['author_id'] ?? '') === $user['id']
+        || role_level($user['role']) >= role_level('editor');
+    if (!$can_edit) {
+        json_error('You do not have permission to regenerate this page.', 403);
+    }
+
+    if (!node_can_regenerate($node)) {
+        json_error('This page cannot be regenerated after child pages have been created.', 400);
+    }
+
+    if ($key_id !== '' && validate_id($key_id, 'key_')) {
+        $key_record = api_key_find_by_id($key_id);
+        if ($key_record === null || ($key_record['status'] ?? '') !== 'active') {
+            $key_record = null;
+        } elseif (($key_error = api_key_access_error($key_record, $user)) !== null) {
+            json_error($key_error, 403);
+        }
+    } else {
+        $key_record = api_key_select_for_user($user['id']);
+    }
+
+    if ($key_record === null) {
+        json_error('No AI key available.', 400);
+    }
+
+    try {
+        $key_record = api_key_prepare_for_use($key_record);
+    } catch (RuntimeException $e) {
+        json_error($e->getMessage(), 500);
+    }
+
+    $is_root = ($node['parent_id'] ?? '') === '';
+    if ($is_root) {
+        $root_scenario = trim((string) (($node['sw_meta']['scenario_essentials'] ?? '')));
+        if ($root_scenario === '') {
+            $root_scenario = story_get_scenario_essentials($story_id);
+        }
+        $prompt_bundle = build_opening_prompt_bundle($node['title'] ?? story_get_title($story_id), $root_scenario);
+    } else {
+        $choice_taken = trim((string) ($node['choice_taken'] ?? ''));
+        if ($choice_taken === '') {
+            json_error('This page is missing the choice text needed for regeneration.', 400);
+        }
+        $prompt_bundle = build_continuation_prompt_bundle($story_id, $node['parent_id'], $choice_taken, true);
+    }
+
+    $system_prompt = $prompt_bundle['system_prompt'];
+    $story_context = $prompt_bundle['story_context'];
+    if ($steer_prompt !== '') {
+        $story_context .= "\n\n[REGENERATION GUIDANCE]\nPlease revise the new page and its choices with this additional direction in mind: " . $steer_prompt;
+    }
+    $active_key = $key_record;
+    $provider = new AIProvider($active_key);
+    $parsed = null;
+    $last_error = '';
+    $raw_response = '';
+
+    for ($attempt = 0; $attempt < 2; $attempt++) {
+        try {
+            if ($attempt === 0) {
+                $raw_response = $provider->generateText($system_prompt, $story_context);
+            } else {
+                $repair_msg = build_repair_prompt($raw_response);
+                $raw_response = $provider->generateText($system_prompt, $repair_msg);
+            }
+
+            $parsed = parse_ai_response($raw_response);
+            if ($parsed !== null) {
+                break;
+            }
+            $last_error = 'AI response was not valid JSON.';
+        } catch (RuntimeException $e) {
+            $last_error = $e->getMessage();
+            if (str_contains($last_error, 'Authentication failed')) {
+                api_key_mark_unavailable($active_key['id'], $last_error);
+                json_error('API key authentication failed and has been deactivated. ' . $last_error, 401);
+            }
+            break;
+        }
+    }
+
+    if ($parsed === null && api_key_is_connection_error($last_error)) {
+        $fallback = api_key_get_fallback($key_record);
+        if ($fallback !== null) {
+            try {
+                $active_key = api_key_prepare_for_use($fallback);
+            } catch (RuntimeException $e) {
+                json_error($e->getMessage(), 500);
+            }
+            $provider = new AIProvider($active_key);
+            $last_error = '';
+            $raw_response = '';
+
+            for ($attempt = 0; $attempt < 2; $attempt++) {
+                try {
+                    if ($attempt === 0) {
+                        $raw_response = $provider->generateText($system_prompt, $story_context);
+                    } else {
+                        $repair_msg = build_repair_prompt($raw_response);
+                        $raw_response = $provider->generateText($system_prompt, $repair_msg);
+                    }
+
+                    $parsed = parse_ai_response($raw_response);
+                    if ($parsed !== null) {
+                        break;
+                    }
+                    $last_error = 'AI response was not valid JSON.';
+                } catch (RuntimeException $e) {
+                    $last_error = $e->getMessage();
+                    if (str_contains($last_error, 'Authentication failed')) {
+                        api_key_mark_unavailable($active_key['id'], $last_error);
+                        json_error('API key authentication failed and has been deactivated. ' . $last_error, 401);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    if ($parsed === null) {
+        api_key_mark_unavailable($active_key['id'], $last_error);
+        json_error('AI generation failed: ' . $last_error, 502);
+    }
+
+    $paragraphs = [];
+    foreach ($parsed['paragraphs'] as $paragraph) {
+        $paragraphs[] = sanitize_paragraph_html($paragraph);
+    }
+    if (empty($paragraphs)) {
+        $paragraphs = [$is_root ? 'The story begins…' : 'The story continues…'];
+    }
+
+    json_success([
+        'story_id'            => $story_id,
+        'node_id'             => $node_id,
+        'current_paragraphs'  => $node['paragraphs'] ?? [],
+        'current_choices'     => $node['choices'] ?? [],
+        'paragraphs'          => $paragraphs,
+        'choices'             => $parsed['choices'] ?? [],
+        'ai_model'            => $active_key['model_text'] ?? '',
+        'ai_provider'         => $active_key['provider'] ?? '',
+        'ai_key_label'        => $active_key['label'] ?? '',
+        'scenario_essentials' => $prompt_bundle['scenario_essentials'] ?? '',
+        'ending'              => $parsed['ending'] ?? false,
+    ]);
+}
+
+/**
+ * Stream a regenerated candidate for an existing node without applying it.
+ *
+ * Expects POST JSON: { story_id, node_id, key_id?, _csrf_token }
+ */
+function handle_stream_regenerate_node(): void
+{
+    header('Content-Type: text/event-stream; charset=UTF-8');
+    header('Cache-Control: no-cache');
+    header('Connection: keep-alive');
+    header('X-Accel-Buffering: no');
+
+    while (ob_get_level()) ob_end_clean();
+
+    $user = current_user();
+    if ($user === null) {
+        sse_event('error', ['error' => 'Authentication required.']);
+        exit;
+    }
+
+    $input = get_json_input();
+    $csrf  = $input['_csrf_token'] ?? '';
+    if (!hash_equals(csrf_token(), $csrf)) {
+        sse_event('error', ['error' => 'Invalid CSRF token.']);
+        exit;
+    }
+
+    $story_id = trim($input['story_id'] ?? '');
+    $node_id  = trim($input['node_id'] ?? '');
+    $key_id   = trim($input['key_id'] ?? '');
+
+    if (!validate_id($story_id, 'story_') || !validate_id($node_id, 'node_')) {
+        sse_event('error', ['error' => 'Invalid story or page ID.']);
+        exit;
+    }
+
+    $node = node_read_for_user($story_id, $node_id, $user);
+    if ($node === null) {
+        sse_event('error', ['error' => 'Story node not found.']);
+        exit;
+    }
+
+    $can_edit = ($node['author_id'] ?? '') === $user['id']
+        || role_level($user['role']) >= role_level('editor');
+    if (!$can_edit) {
+        sse_event('error', ['error' => 'You do not have permission to regenerate this page.']);
+        exit;
+    }
+
+    if (!node_can_regenerate($node)) {
+        sse_event('error', ['error' => 'This page cannot be regenerated after child pages have been created.']);
+        exit;
+    }
+
+    if ($key_id !== '' && validate_id($key_id, 'key_')) {
+        $key_record = api_key_find_by_id($key_id);
+        if ($key_record === null || ($key_record['status'] ?? '') !== 'active') {
+            $key_record = null;
+        } elseif (($key_error = api_key_access_error($key_record, $user)) !== null) {
+            sse_event('error', ['error' => $key_error]);
+            exit;
+        }
+    } else {
+        $key_record = api_key_select_for_user($user['id']);
+    }
+
+    if ($key_record === null) {
+        sse_event('error', ['error' => 'No AI key available.']);
+        exit;
+    }
+
+    try {
+        $key_record = api_key_prepare_for_use($key_record);
+    } catch (RuntimeException $e) {
+        sse_event('error', ['error' => $e->getMessage()]);
+        exit;
+    }
+
+    sse_event('info', ['key_label' => $key_record['label'] ?? 'Unknown']);
+
+    $is_root = ($node['parent_id'] ?? '') === '';
+    if ($is_root) {
+        $root_scenario = trim((string) (($node['sw_meta']['scenario_essentials'] ?? '')));
+        if ($root_scenario === '') {
+            $root_scenario = story_get_scenario_essentials($story_id);
+        }
+        $prompt_bundle = build_opening_prompt_bundle($node['title'] ?? story_get_title($story_id), $root_scenario);
+    } else {
+        $choice_taken = trim((string) ($node['choice_taken'] ?? ''));
+        if ($choice_taken === '') {
+            sse_event('error', ['error' => 'This page is missing the choice text needed for regeneration.']);
+            exit;
+        }
+        $prompt_bundle = build_continuation_prompt_bundle($story_id, $node['parent_id'], $choice_taken, true);
+    }
+
+    $system_prompt = $prompt_bundle['system_prompt'];
+    $story_context = $prompt_bundle['story_context'];
+    if ($steer_prompt !== '') {
+        $story_context .= "\n\n[REGENERATION GUIDANCE]\nPlease revise the new page and its choices with this additional direction in mind: " . $steer_prompt;
+    }
+    $provider = new AIProvider($key_record);
+    $active_key = $key_record;
+    $tokens_sent = 0;
+    $raw_response = '';
+
+    $stream_chunk_handler = function (string $chunk) use (&$tokens_sent) {
+        echo "event: token\ndata: " . str_replace("\n", "\ndata: ", $chunk) . "\n\n";
+        flush();
+        $tokens_sent++;
+    };
+
+    try {
+        $raw_response = $provider->generateTextStream($system_prompt, $story_context, $stream_chunk_handler);
+    } catch (RuntimeException $e) {
+        $err_msg = $e->getMessage();
+
+        if (str_contains($err_msg, 'Authentication failed')) {
+            api_key_mark_unavailable($active_key['id'], $err_msg);
+            sse_event('error', ['error' => $err_msg]);
+            exit;
+        }
+
+        if ($tokens_sent === 0 && api_key_is_connection_error($err_msg)) {
+            $fallback = api_key_get_fallback($key_record);
+            if ($fallback !== null) {
+                try {
+                    $active_key = api_key_prepare_for_use($fallback);
+                } catch (RuntimeException $e3) {
+                    sse_event('error', ['error' => $e3->getMessage()]);
+                    exit;
+                }
+                $provider = new AIProvider($active_key);
+                sse_event('info', ['key_label' => $active_key['label'] ?? 'Unknown', 'fallback' => true]);
+
+                try {
+                    $raw_response = $provider->generateTextStream($system_prompt, $story_context, $stream_chunk_handler);
+                } catch (RuntimeException $e2) {
+                    if (str_contains($e2->getMessage(), 'Authentication failed')) {
+                        api_key_mark_unavailable($active_key['id'], $e2->getMessage());
+                    }
+                    sse_event('error', ['error' => $e2->getMessage()]);
+                    exit;
+                }
+            } else {
+                sse_event('error', ['error' => $err_msg]);
+                exit;
+            }
+        } else {
+            sse_event('error', ['error' => $err_msg]);
+            exit;
+        }
+    }
+
+    $parsed = parse_ai_response($raw_response);
+    if ($parsed === null) {
+        try {
+            $repair_msg = build_repair_prompt($raw_response);
+            sse_event('info', ['message' => 'Parsing response…']);
+            $raw_response = $provider->generateText($system_prompt, $repair_msg);
+            $parsed = parse_ai_response($raw_response);
+        } catch (RuntimeException $e) {
+            // Ignore retry failure
+        }
+    }
+
+    if ($parsed === null) {
+        api_key_mark_unavailable($active_key['id'], 'JSON parse failure after retry');
+        sse_event('error', ['error' => 'AI response could not be parsed.']);
+        exit;
+    }
+
+    $paragraphs = [];
+    foreach ($parsed['paragraphs'] as $paragraph) {
+        $paragraphs[] = sanitize_paragraph_html($paragraph);
+    }
+    if (empty($paragraphs)) {
+        $paragraphs = [$is_root ? 'The story begins…' : 'The story continues…'];
+    }
+
+    sse_event('done', [
+        'ok'                  => true,
+        'story_id'            => $story_id,
+        'node_id'             => $node_id,
+        'current_paragraphs'  => $node['paragraphs'] ?? [],
+        'current_choices'     => $node['choices'] ?? [],
+        'paragraphs'          => $paragraphs,
+        'choices'             => $parsed['choices'] ?? [],
+        'ai_model'            => $active_key['model_text'] ?? '',
+        'ai_provider'         => $active_key['provider'] ?? '',
+        'ai_key_label'        => $active_key['label'] ?? '',
+        'scenario_essentials' => $prompt_bundle['scenario_essentials'] ?? '',
+        'ending'              => $parsed['ending'] ?? false,
+    ]);
+    exit;
+}
+
+/**
+ * Apply an accepted regenerated candidate to an existing node.
+ *
+ * Expects POST JSON: { story_id, node_id, paragraphs, choices, ai_model, ai_provider, ai_key_label, scenario_essentials?, _csrf_token }
+ */
+function handle_apply_regenerated_node(): void
+{
+    $user = current_user();
+    if ($user === null) {
+        json_error('Authentication required.', 401);
+    }
+
+    $input = get_json_input();
+    csrf_check($input['_csrf_token'] ?? '');
+
+    $story_id = trim($input['story_id'] ?? '');
+    $node_id  = trim($input['node_id'] ?? '');
+
+    if (!validate_id($story_id, 'story_') || !validate_id($node_id, 'node_')) {
+        json_error('Invalid story or page ID.', 400);
+    }
+
+    $node = node_read_for_user($story_id, $node_id, $user);
+    if ($node === null) {
+        json_error('Story node not found.', 404);
+    }
+
+    $can_edit = ($node['author_id'] ?? '') === $user['id']
+        || role_level($user['role']) >= role_level('editor');
+    if (!$can_edit) {
+        json_error('You do not have permission to update this page.', 403);
+    }
+
+    if (!node_can_regenerate($node)) {
+        json_error('This page can no longer accept a regenerated version because child pages now exist.', 400);
+    }
+
+    $input_paragraphs = $input['paragraphs'] ?? [];
+    if (!is_array($input_paragraphs) || empty($input_paragraphs)) {
+        json_error('Regenerated text is missing.', 400);
+    }
+
+    $paragraphs = [];
+    foreach ($input_paragraphs as $paragraph) {
+        if (!is_string($paragraph)) {
+            continue;
+        }
+        $clean = sanitize_paragraph_html($paragraph);
+        if ($clean !== '') {
+            $paragraphs[] = $clean;
+        }
+    }
+    if (empty($paragraphs)) {
+        json_error('Regenerated text is empty after sanitization.', 400);
+    }
+
+    $input_choices = $input['choices'] ?? [];
+    if (!is_array($input_choices)) {
+        $input_choices = [];
+    }
+
+    $choices = [];
+    foreach (array_values($input_choices) as $index => $choice) {
+        if (!is_array($choice)) {
+            continue;
+        }
+
+        $text = trim((string) ($choice['text'] ?? ''));
+        if ($text === '') {
+            continue;
+        }
+
+        $choices[] = [
+            'id'   => isset($choice['id']) ? (int) $choice['id'] : ($index + 1),
+            'text' => $text,
+            'node' => null,
+        ];
+    }
+
+    $meta = is_array($node['sw_meta'] ?? null) ? $node['sw_meta'] : [];
+    $meta['created_by'] = $meta['created_by'] ?? ($node['author_id'] ?? $user['id']);
+    $meta['created_at'] = $meta['created_at'] ?? ($node['created_at'] ?? gmdate('Y-m-d\TH:i:s\Z'));
+    $meta['ai_generated'] = true;
+    $meta['ai_model'] = trim((string) ($input['ai_model'] ?? ''));
+    $meta['ai_provider'] = trim((string) ($input['ai_provider'] ?? ''));
+    $meta['ai_key_label'] = trim((string) ($input['ai_key_label'] ?? ''));
+
+    if (($node['parent_id'] ?? '') === '') {
+        $scenario = normalize_scenario_essentials((string) ($input['scenario_essentials'] ?? ''));
+        if ($scenario === '') {
+            $scenario = trim((string) ($meta['scenario_essentials'] ?? ''));
+        }
+        if ($scenario !== '') {
+            $meta['scenario_essentials'] = $scenario;
+        }
+    }
+
+    $meta = node_meta_append_history($meta, $user['id'], 'regenerated', $meta['ai_model']);
+
+    if (!node_replace_content($story_id, $node_id, $paragraphs, $choices, $meta)) {
+        json_error('Failed to update the regenerated page.', 500);
+    }
+
+    $base = base_url();
+    json_success([
+        'story_id' => $story_id,
+        'node_id'  => $node_id,
+        'url'      => $base . '/node.php?story=' . urlencode($story_id) . '&id=' . urlencode($node_id),
+        'ending'   => !empty($input['ending']),
     ]);
 }
 
@@ -358,7 +922,7 @@ function handle_stream_generate_node(): void
     $story_id       = $input['story_id'] ?? '';
     $parent_node_id = $input['parent_node_id'] ?? '';
     $choice_text    = trim($input['choice_text'] ?? '');
-    $scenario       = trim($input['scenario_essentials'] ?? '');
+    $scenario       = normalize_scenario_essentials((string) ($input['scenario_essentials'] ?? ''));
     $title          = trim($input['title'] ?? '');
     $key_id         = trim($input['key_id'] ?? '');
 
@@ -371,6 +935,9 @@ function handle_stream_generate_node(): void
         $key_record = api_key_find_by_id($key_id);
         if ($key_record === null || $key_record['status'] !== 'active') {
             $key_record = null;
+        } elseif (($key_error = api_key_access_error($key_record, $user)) !== null) {
+            sse_event('error', ['error' => $key_error]);
+            exit;
         }
     } else {
         $key_record = api_key_select_for_user($user_id);
@@ -378,6 +945,12 @@ function handle_stream_generate_node(): void
 
     if ($key_record === null) {
         sse_event('error', ['error' => 'No AI key available.']);
+        exit;
+    }
+    try {
+        $key_record = api_key_prepare_for_use($key_record);
+    } catch (RuntimeException $e) {
+        sse_event('error', ['error' => $e->getMessage()]);
         exit;
     }
 
@@ -395,32 +968,77 @@ function handle_stream_generate_node(): void
             sse_event('error', ['error' => 'Choice text is required.']);
             exit;
         }
-    }
-
-    $system_prompt = get_system_prompt($scenario);
-
-    if ($is_opening) {
-        $user_message = build_opening_prompt($title, $scenario);
+        $parent = node_read_for_user($story_id, $parent_node_id, $user);
+        if ($parent === null) {
+            sse_event('error', ['error' => 'Parent page not found.']);
+            exit;
+        }
+        $check_quarantine = (($parent['location'] ?? 'stories') === 'quarantine');
     } else {
-        $entries = reconstruct_context($story_id, $parent_node_id);
-        $entries = truncate_context($entries);
-        $user_message = build_story_prompt($entries, $choice_text);
+        $check_quarantine = false;
+        $parent = null;
     }
 
-    $provider = new AIProvider($key_record);
+    $prompt_bundle = $is_opening
+        ? build_opening_prompt_bundle($title, $scenario)
+        : build_continuation_prompt_bundle($story_id, $parent_node_id, $choice_text, $check_quarantine);
+    $system_prompt = $prompt_bundle['system_prompt'];
+    $story_context = $prompt_bundle['story_context'];
+
+    $provider   = new AIProvider($key_record);
+    $active_key = $key_record;
+
+    // Track tokens sent so we know whether we can still fall back transparently
+    $tokens_sent = 0;
+    $raw_response = '';
+
+    $stream_chunk_handler = function (string $chunk) use (&$tokens_sent) {
+        echo "event: token\ndata: " . str_replace("\n", "\ndata: ", $chunk) . "\n\n";
+        flush();
+        $tokens_sent++;
+    };
 
     try {
-        $raw_response = $provider->generateTextStream($system_prompt, $user_message, function (string $chunk) {
-            // Send raw text (no JSON wrapper) for efficient streaming display
-            echo "event: token\ndata: " . str_replace("\n", "\ndata: ", $chunk) . "\n\n";
-            flush();
-        });
+        $raw_response = $provider->generateTextStream($system_prompt, $story_context, $stream_chunk_handler);
     } catch (RuntimeException $e) {
-        if (str_contains($e->getMessage(), 'Authentication failed')) {
-            api_key_mark_unavailable($key_record['id'], $e->getMessage());
+        $err_msg = $e->getMessage();
+
+        if (str_contains($err_msg, 'Authentication failed')) {
+            api_key_mark_unavailable($active_key['id'], $err_msg);
+            sse_event('error', ['error' => $err_msg]);
+            exit;
         }
-        sse_event('error', ['error' => $e->getMessage()]);
-        exit;
+
+        // If no tokens were sent yet and a fallback key is configured, try it transparently
+        if ($tokens_sent === 0 && api_key_is_connection_error($err_msg)) {
+            $fallback = api_key_get_fallback($key_record);
+            if ($fallback !== null) {
+                try {
+                    $active_key = api_key_prepare_for_use($fallback);
+                } catch (RuntimeException $e3) {
+                    sse_event('error', ['error' => $e3->getMessage()]);
+                    exit;
+                }
+                $provider   = new AIProvider($active_key);
+                sse_event('info', ['key_label' => $active_key['label'] ?? 'Unknown', 'fallback' => true]);
+
+                try {
+                    $raw_response = $provider->generateTextStream($system_prompt, $story_context, $stream_chunk_handler);
+                } catch (RuntimeException $e2) {
+                    if (str_contains($e2->getMessage(), 'Authentication failed')) {
+                        api_key_mark_unavailable($active_key['id'], $e2->getMessage());
+                    }
+                    sse_event('error', ['error' => $e2->getMessage()]);
+                    exit;
+                }
+            } else {
+                sse_event('error', ['error' => $err_msg]);
+                exit;
+            }
+        } else {
+            sse_event('error', ['error' => $err_msg]);
+            exit;
+        }
     }
 
     // Parse the accumulated response
@@ -438,7 +1056,7 @@ function handle_stream_generate_node(): void
     }
 
     if ($parsed === null) {
-        api_key_mark_unavailable($key_record['id'], 'JSON parse failure after retry');
+        api_key_mark_unavailable($active_key['id'], 'JSON parse failure after retry');
         sse_event('error', ['error' => 'AI response could not be parsed.']);
         exit;
     }
@@ -449,20 +1067,22 @@ function handle_stream_generate_node(): void
         $paragraphs[] = sanitize_paragraph_html($p);
     }
     if (empty($paragraphs)) {
-        $paragraphs = ['The story continues…'];
+        $paragraphs = [$is_opening ? 'The story begins…' : 'The story continues…'];
     }
 
     $choices = $parsed['choices'] ?? [];
 
-    // AI metadata from the key used
+    // AI metadata from the key actually used (may be the fallback)
     $ai_meta = [
-        'ai_model'     => $key_record['model_text'] ?? '',
-        'ai_provider'  => $key_record['provider'] ?? '',
-        'ai_key_label' => $key_record['label'] ?? '',
+        'ai_model'     => $active_key['model_text'] ?? '',
+        'ai_provider'  => $active_key['provider'] ?? '',
+        'ai_key_label' => $active_key['label'] ?? '',
     ];
 
     if ($is_opening) {
-        $result = story_create(h($title), $author_id, $paragraphs, $ai_meta);
+        $result = story_create(h($title), $author_id, $paragraphs, array_merge($ai_meta, [
+            'scenario_essentials' => $prompt_bundle['scenario_essentials'],
+        ]));
         $story_id = $result['story_id'];
         $node_id  = $result['node_id'];
         if (!empty($choices)) {
@@ -476,6 +1096,7 @@ function handle_stream_generate_node(): void
             'title'        => story_get_title($story_id),
             'paragraphs'   => $paragraphs,
             'choices'      => $choices,
+            'location'     => (($parent['location'] ?? 'stories') === 'quarantine' ? 'quarantine' : 'stories'),
         ], $ai_meta));
         node_link_choice($story_id, $parent_node_id, $choice_text, $node_id);
     }
@@ -542,6 +1163,17 @@ function handle_test_api_key(): void
         json_error('You can only test your own keys.', 403);
     }
 
+    $key_error = api_key_access_error($key_record, $user);
+    if ($key_error !== null) {
+        json_error($key_error, 403);
+    }
+
+    try {
+        $key_record = api_key_prepare_for_use($key_record);
+    } catch (RuntimeException $e) {
+        json_error($e->getMessage(), 500);
+    }
+
     $provider = new AIProvider($key_record);
     $result = $provider->testConnection();
 
@@ -551,7 +1183,7 @@ function handle_test_api_key(): void
 /**
  * Save (create) a new API key.
  *
- * Expects POST JSON: { label, provider, base_url, api_key, model_text, model_image, scope, _csrf_token }
+ * Expects POST JSON: { label, provider, base_url, api_key, model_text, model_image, scope, fallback_key_id?, _csrf_token }
  * Requires contributor+.
  */
 function handle_save_api_key(): void
@@ -567,13 +1199,14 @@ function handle_save_api_key(): void
         json_error('Invalid CSRF token.', 403);
     }
 
-    $label      = trim($input['label'] ?? '');
-    $provider   = trim($input['provider'] ?? '');
-    $base_url   = trim($input['base_url'] ?? '');
-    $api_key    = trim($input['api_key'] ?? '');
-    $model_text = trim($input['model_text'] ?? '');
-    $model_image = trim($input['model_image'] ?? '');
-    $scope      = trim($input['scope'] ?? 'self');
+    $label           = trim($input['label'] ?? '');
+    $provider        = trim($input['provider'] ?? '');
+    $base_url        = trim($input['base_url'] ?? '');
+    $api_key         = trim($input['api_key'] ?? '');
+    $model_text      = trim($input['model_text'] ?? '');
+    $model_image     = trim($input['model_image'] ?? '');
+    $scope           = trim($input['scope'] ?? 'self');
+    $fallback_key_id = trim($input['fallback_key_id'] ?? '');
 
     if ($label === '') {
         json_error('Label is required.', 400);
@@ -593,22 +1226,257 @@ function handle_save_api_key(): void
         json_error('Base URL is required for this provider.', 400);
     }
 
+    // Ollama's OpenAI-compatible endpoint lives under /v1; normalize if the user
+    // entered just the host:port (e.g. http://192.168.1.60:11434).
+    if ($provider === 'ollama' && !str_ends_with(rtrim($base_url, '/'), '/v1')) {
+        $base_url = rtrim($base_url, '/') . '/v1';
+    }
+
+    $url_policy = api_key_url_policy($base_url);
+    if (!$url_policy['ok']) {
+        json_error($url_policy['reason'], 400);
+    }
+    if ($url_policy['restricted'] && $user['role'] !== 'admin') {
+        json_error($url_policy['reason'], 403);
+    }
+
     if (!in_array($scope, ['self', 'all'], true)) {
         $scope = 'self';
     }
 
+    // Validate fallback key if provided
+    if ($fallback_key_id !== '') {
+        if (!validate_id($fallback_key_id, 'key_')) {
+            json_error('Invalid fallback key ID.', 400);
+        }
+        $fb_record = api_key_find_by_id($fallback_key_id);
+        if ($fb_record === null) {
+            json_error('Fallback key not found.', 400);
+        }
+        // Prevent pointing at a key owned by someone else unless it's scope=all
+        if ($fb_record['owner_user_id'] !== $user['id'] && ($fb_record['scope'] ?? '') !== 'all') {
+            json_error('Fallback key must be yours or shared with all users.', 403);
+        }
+    } else {
+        $fallback_key_id = null;
+    }
+
     $record = api_key_create([
-        'owner_user_id' => $user['id'],
-        'label'         => $label,
-        'provider'      => $provider,
-        'base_url'      => $base_url,
-        'api_key'       => $api_key,
-        'model_text'    => $model_text,
-        'model_image'   => $model_image,
-        'scope'         => $scope,
+        'owner_user_id'  => $user['id'],
+        'label'          => $label,
+        'provider'       => $provider,
+        'base_url'       => $base_url,
+        'api_key'        => $api_key,
+        'model_text'     => $model_text,
+        'model_image'    => $model_image,
+        'scope'          => $scope,
+        'fallback_key_id' => $fallback_key_id,
     ]);
 
     json_success(['key' => array_diff_key($record, ['api_key' => 1]), 'message' => 'API key saved.']);
+}
+
+/**
+ * Update an existing API key without exposing or changing the stored secret.
+ *
+ * Expects POST JSON: { key_id, label, provider, base_url, model_text, model_image, scope, fallback_key_id?, _csrf_token }
+ * Requires key owner or admin.
+ */
+function handle_update_api_key(): void
+{
+    $user = current_user();
+    if ($user === null || role_level($user['role']) < role_level('contributor')) {
+        json_error('Contributor access required.', 403);
+    }
+
+    $input = get_json_input();
+    $csrf  = $input['_csrf_token'] ?? '';
+    if (!hash_equals(csrf_token(), $csrf)) {
+        json_error('Invalid CSRF token.', 403);
+    }
+
+    $key_id          = trim((string) ($input['key_id'] ?? ''));
+    $label           = trim((string) ($input['label'] ?? ''));
+    $provider        = trim((string) ($input['provider'] ?? ''));
+    $base_url        = trim((string) ($input['base_url'] ?? ''));
+    $model_text      = trim((string) ($input['model_text'] ?? ''));
+    $model_image     = trim((string) ($input['model_image'] ?? ''));
+    $scope           = trim((string) ($input['scope'] ?? 'self'));
+    $fallback_key_id = trim((string) ($input['fallback_key_id'] ?? ''));
+
+    if (!validate_id($key_id, 'key_')) {
+        json_error('Invalid key ID.', 400);
+    }
+
+    $existing = api_key_find_by_id($key_id);
+    if ($existing === null) {
+        json_error('Key not found.', 404);
+    }
+
+    if (($existing['owner_user_id'] ?? '') !== $user['id'] && role_level($user['role']) < role_level('admin')) {
+        json_error('Permission denied.', 403);
+    }
+
+    if ($label === '') {
+        json_error('Label is required.', 400);
+    }
+    if (!api_key_valid_provider($provider)) {
+        json_error('Invalid provider.', 400);
+    }
+    if ($model_text === '') {
+        json_error('Text model name is required.', 400);
+    }
+
+    if ($base_url === '') {
+        $base_url = api_key_default_base_url($provider);
+    }
+    if ($base_url === '') {
+        json_error('Base URL is required for this provider.', 400);
+    }
+
+    if ($provider === 'ollama' && !str_ends_with(rtrim($base_url, '/'), '/v1')) {
+        $base_url = rtrim($base_url, '/') . '/v1';
+    }
+
+    $url_policy = api_key_url_policy($base_url);
+    if (!$url_policy['ok']) {
+        json_error($url_policy['reason'], 400);
+    }
+    if ($url_policy['restricted'] && $user['role'] !== 'admin') {
+        json_error($url_policy['reason'], 403);
+    }
+
+    if (!in_array($scope, ['self', 'all'], true)) {
+        $scope = 'self';
+    }
+
+    if ($fallback_key_id !== '') {
+        if (!validate_id($fallback_key_id, 'key_')) {
+            json_error('Invalid fallback key ID.', 400);
+        }
+        if ($fallback_key_id === $key_id) {
+            json_error('A key cannot fall back to itself.', 400);
+        }
+        $fb_record = api_key_find_by_id($fallback_key_id);
+        if ($fb_record === null) {
+            json_error('Fallback key not found.', 400);
+        }
+        if (($fb_record['owner_user_id'] ?? '') !== $user['id'] && ($fb_record['scope'] ?? '') !== 'all') {
+            json_error('Fallback key must be yours or shared with all users.', 403);
+        }
+    } else {
+        $fallback_key_id = null;
+    }
+
+    $ok = api_key_update($key_id, [
+        'label'           => $label,
+        'provider'        => $provider,
+        'base_url'        => rtrim($base_url, '/'),
+        'model_text'      => $model_text,
+        'model_image'     => $model_image,
+        'scope'           => $scope,
+        'fallback_key_id' => $fallback_key_id,
+    ]);
+
+    if (!$ok) {
+        json_error('Failed to update API key.', 500);
+    }
+
+    $updated = api_key_find_by_id($key_id);
+    if ($updated === null) {
+        json_error('Updated key could not be reloaded.', 500);
+    }
+
+    json_success(['key' => array_diff_key($updated, ['api_key' => 1]), 'message' => 'API key updated.']);
+}
+
+/**
+ * List available models for an existing or in-progress API-key configuration.
+ *
+ * Expects POST JSON: { key_id? , provider?, base_url?, api_key?, _csrf_token }
+ * Requires contributor+.
+ */
+function handle_list_api_models(): void
+{
+    $user = current_user();
+    if ($user === null || role_level($user['role']) < role_level('contributor')) {
+        json_error('Contributor access required.', 403);
+    }
+
+    $input = get_json_input();
+    $csrf  = $input['_csrf_token'] ?? '';
+    if (!hash_equals(csrf_token(), $csrf)) {
+        json_error('Invalid CSRF token.', 403);
+    }
+
+    $key_id = trim((string) ($input['key_id'] ?? ''));
+
+    if ($key_id !== '') {
+        if (!validate_id($key_id, 'key_')) {
+            json_error('Invalid key ID.', 400);
+        }
+
+        $record = api_key_find_by_id($key_id);
+        if ($record === null) {
+            json_error('Key not found.', 404);
+        }
+
+        $key_error = api_key_access_error($record, $user);
+        if ($key_error !== null) {
+            json_error($key_error, 403);
+        }
+
+        try {
+            $record = api_key_prepare_for_use($record);
+        } catch (RuntimeException $e) {
+            json_error($e->getMessage(), 500);
+        }
+    } else {
+        $provider = trim((string) ($input['provider'] ?? ''));
+        $base_url = trim((string) ($input['base_url'] ?? ''));
+        $api_key  = trim((string) ($input['api_key'] ?? ''));
+
+        if (!api_key_valid_provider($provider)) {
+            json_error('Invalid provider.', 400);
+        }
+
+        if ($base_url === '') {
+            $base_url = api_key_default_base_url($provider);
+        }
+        if ($base_url === '') {
+            json_error('Base URL is required for this provider.', 400);
+        }
+
+        if ($provider === 'ollama' && !str_ends_with(rtrim($base_url, '/'), '/v1')) {
+            $base_url = rtrim($base_url, '/') . '/v1';
+        }
+
+        $url_policy = api_key_url_policy($base_url);
+        if (!$url_policy['ok']) {
+            json_error($url_policy['reason'], 400);
+        }
+        if ($url_policy['restricted'] && $user['role'] !== 'admin') {
+            json_error($url_policy['reason'], 403);
+        }
+
+        $record = [
+            'provider' => $provider,
+            'base_url' => rtrim($base_url, '/'),
+            'api_key' => $api_key,
+            'model_text' => '',
+            'model_image' => '',
+        ];
+    }
+
+    $provider_client = new AIProvider($record);
+
+    try {
+        $models = $provider_client->listModels();
+    } catch (RuntimeException $e) {
+        json_error('Failed to list models: ' . $e->getMessage(), 400);
+    }
+
+    json_success(['models' => $models]);
 }
 
 /**
@@ -775,6 +1643,76 @@ function get_json_input(): array
 }
 
 /**
+ * Use the text AI to produce a brief visual-context summary for image generation.
+ *
+ * Walks the full story ancestor chain (excluding the current node) and asks the
+ * text model to describe, in 2–3 sentences, the protagonist's appearance, the
+ * setting, and any key recurring visual elements. Returns an empty string if no
+ * suitable text key is available or the call fails.
+ *
+ * @param string $story_id          Story ID.
+ * @param string $node_id           The node being illustrated (current node).
+ * @param array  $image_key         The image-generation key record (reused if it has model_text).
+ * @param bool   $check_quarantine  Also read quarantined nodes when needed.
+ * @return string The summary, or '' on failure / no key.
+ */
+function build_image_context_summary(string $story_id, string $node_id, array $image_key, ?array $user = null, bool $check_quarantine = false): string
+{
+    // Prefer the image key's own text model; fall back to any active text key.
+    $text_key = null;
+    if (!empty($image_key['model_text']) && api_key_access_error($image_key, $user) === null) {
+        $text_key = $image_key;
+    } else {
+        $text_key = api_key_select_text_for_user($user['id'] ?? null);
+    }
+
+    if ($text_key === null) {
+        return '';
+    }
+
+    // Build context from all ancestor nodes (not the current one — its text
+    // is already used verbatim in the main image prompt).
+    $node = node_read($story_id, $node_id, $check_quarantine);
+    $parent_id = $node['parent_id'] ?? '';
+    if ($parent_id === '') {
+        return ''; // Opening node — no prior context to summarise.
+    }
+
+    $entries = reconstruct_context($story_id, $parent_id, $check_quarantine);
+    $entries = truncate_context($entries, 10000);
+
+    $context_parts = [];
+    foreach ($entries as $entry) {
+        if ($entry['choice_taken'] !== '') {
+            $context_parts[] = '> Player chose: ' . $entry['choice_taken'];
+        }
+        if ($entry['paragraphs'] !== '') {
+            $context_parts[] = $entry['paragraphs'];
+        }
+    }
+
+    if (empty($context_parts)) {
+        return '';
+    }
+
+    $context_text = implode("\n\n", $context_parts);
+    $system = 'You are a visual-context assistant for an interactive fiction story.';
+    $prompt = "Here is the story so far:\n\n{$context_text}\n\n"
+            . "In 2–3 sentences describe ONLY visually observable details from this story: "
+            . "the protagonist's appearance (clothing, features), the setting/environment, "
+            . "and any recurring visual props or atmosphere. "
+            . "Do NOT describe plot events. Output plain prose only — no bullet points, no labels.";
+
+    try {
+        $provider = new AIProvider(api_key_prepare_for_use($text_key));
+        $summary  = trim($provider->generateText($system, $prompt));
+        return $summary;
+    } catch (RuntimeException $e) {
+        return ''; // Silently degrade if AI call fails.
+    }
+}
+
+/**
  * Generate an image for a node and save it.
  *
  * Expects POST JSON: { story_id, node_id, key_id? }
@@ -795,12 +1733,19 @@ function handle_generate_image(): void
 
     $user = current_user();
     $user_id = $user ? $user['id'] : null;
+    $node = node_read_for_user($story_id, $node_id, $user);
+    if ($node === null) {
+        json_error('Page not found.', 404);
+    }
+    $check_quarantine = (($node['location'] ?? 'stories') === 'quarantine');
 
     // Select API key
     if ($key_id !== '' && validate_id($key_id, 'key_')) {
         $key_record = api_key_find_by_id($key_id);
         if ($key_record === null || $key_record['status'] !== 'active') {
             $key_record = null;
+        } elseif (($key_error = api_key_access_error($key_record, $user)) !== null) {
+            json_error($key_error, 403);
         }
     } else {
         $key_record = api_key_select_for_user($user_id);
@@ -814,8 +1759,18 @@ function handle_generate_image(): void
         json_error('Selected key has no image model configured.');
     }
 
-    $prompt = build_image_prompt($story_id, $node_id);
-    $provider = new AIProvider($key_record);
+    $steer_prompt = trim((string) ($input['steer_prompt'] ?? ''));
+    $context_summary = build_image_context_summary($story_id, $node_id, $key_record, $user, $check_quarantine);
+    $prompt     = build_image_prompt($story_id, $node_id, $context_summary, $check_quarantine);
+    if ($steer_prompt !== '') {
+        $prompt .= "\n\nAdditional direction for this regeneration: " . $steer_prompt;
+    }
+    try {
+        $active_key = api_key_prepare_for_use($key_record);
+    } catch (RuntimeException $e) {
+        json_error($e->getMessage(), 500);
+    }
+    $provider   = new AIProvider($active_key);
 
     try {
         $image_data = $provider->generateImage($prompt);
@@ -823,11 +1778,40 @@ function handle_generate_image(): void
         $base = base_url();
         json_success(['image_url' => $base . $image_url]);
     } catch (RuntimeException $e) {
-        // Mark key unavailable on auth errors
         $msg = $e->getMessage();
+
+        // Auth errors: mark unavailable immediately
         if (str_contains($msg, 'HTTP 401') || str_contains($msg, 'HTTP 403')) {
-            api_key_mark_unavailable($key_record['id']);
+            api_key_mark_unavailable($active_key['id']);
+            json_error('Image generation failed: ' . $msg);
         }
+
+        // Connection error: try fallback key if configured (primary stays active)
+        if (api_key_is_connection_error($msg)) {
+            $fallback = api_key_get_fallback($key_record);
+            if ($fallback !== null && !empty($fallback['model_image'])) {
+                try {
+                    $active_key = api_key_prepare_for_use($fallback);
+                } catch (RuntimeException $e3) {
+                    json_error($e3->getMessage(), 500);
+                }
+                $provider   = new AIProvider($active_key);
+
+                try {
+                    $image_data = $provider->generateImage($prompt);
+                    $image_url = node_save_image($node_id, $image_data);
+                    $base = base_url();
+                    json_success(['image_url' => $base . $image_url]);
+                } catch (RuntimeException $e2) {
+                    $msg = $e2->getMessage();
+                    if (str_contains($msg, 'HTTP 401') || str_contains($msg, 'HTTP 403')) {
+                        api_key_mark_unavailable($active_key['id']);
+                    }
+                    json_error('Image generation failed: ' . $msg);
+                }
+            }
+        }
+
         json_error('Image generation failed: ' . $msg);
     }
 }
@@ -1092,7 +2076,7 @@ function handle_save_theme_css(): void
 
     $user = current_user();
     if (!$user || $user['role'] !== 'admin') {
-        flash('Admin access required.', 'error');
+        flash('error', 'Admin access required.');
         redirect(base_url() . '/admin.php?tab=themes');
     }
 
@@ -1100,18 +2084,18 @@ function handle_save_theme_css(): void
     $css = $_POST['css'] ?? '';
 
     if ($theme_file === '' || !preg_match('/^[a-zA-Z0-9_-]+\.css$/', $theme_file)) {
-        flash('Invalid theme filename.', 'error');
+        flash('error', 'Invalid theme filename.');
         redirect(base_url() . '/admin.php?tab=themes');
     }
 
     $path = sw_root() . '/_themes/' . $theme_file;
     if (!file_exists($path)) {
-        flash('Theme file not found.', 'error');
+        flash('error', 'Theme file not found.');
         redirect(base_url() . '/admin.php?tab=themes');
     }
 
     atomic_write($path, $css);
-    flash('Theme CSS saved.', 'success');
+    flash('success', 'Theme CSS saved.');
     redirect(base_url() . '/admin.php?tab=themes');
 }
 
@@ -1143,7 +2127,7 @@ function handle_set_story_theme(): void
     if (!$root_id) {
         json_error('Story not found.');
     }
-    $root = node_read($story_id, $root_id);
+    $root = node_read_for_user($story_id, $root_id, $user);
     if (!$root) {
         json_error('Story not found.');
     }
@@ -1161,6 +2145,55 @@ function handle_set_story_theme(): void
 
     $label = $theme === '' ? 'default (site theme)' : $theme;
     json_success(['message' => "Story theme set to {$label}."]);
+}
+
+/**
+ * Update the root node's Scenario Essentials text.
+ *
+ * Expects: { story_id, scenario_essentials, _csrf_token }
+  */
+function handle_update_story_scenario(): void
+{
+    $input = get_json_input();
+    csrf_check($input['_csrf_token'] ?? '');
+
+    $user = current_user();
+    if (!$user) {
+        json_error('Login required.', 401);
+    }
+
+    $story_id = trim((string) ($input['story_id'] ?? ''));
+    $scenario = normalize_scenario_essentials((string) ($input['scenario_essentials'] ?? ''));
+
+    if (!validate_id($story_id, 'story_')) {
+        json_error('Invalid story ID.');
+    }
+
+    $root_id = story_find_root($story_id);
+    if (!$root_id) {
+        json_error('Story not found.', 404);
+    }
+
+    $root = node_read($story_id, $root_id, true);
+    if (!$root) {
+        json_error('Story not found.', 404);
+    }
+
+    $is_author = ($root['author_id'] ?? '') === $user['id'];
+    $is_editor = role_level($user['role']) >= role_level('editor');
+    if (!$is_author && !$is_editor) {
+        json_error('You do not have permission to update Scenario Essentials.', 403);
+    }
+
+    $meta = $root['sw_meta'] ?? [];
+    $meta['scenario_essentials'] = $scenario;
+    $meta = node_meta_append_history($meta, $user['id'], 'scenario_updated');
+    node_update_meta($story_id, $root_id, $meta);
+
+    json_success([
+        'message' => 'Scenario Essentials updated.',
+        'scenario_essentials' => $scenario,
+    ]);
 }
 
 /**
@@ -1221,7 +2254,7 @@ function handle_upload_image(): void
     }
 
     // Permission check: author of the node or editor+
-    $node = node_read($story_id, $node_id);
+    $node = node_read_for_user($story_id, $node_id, $user);
     if ($node === null) {
         json_error('Page not found.', 404);
     }
@@ -1272,4 +2305,64 @@ function handle_upload_image(): void
     $image_url = node_save_image($node_id, $image_data, $extension);
     $base = base_url();
     json_success(['image_url' => $base . $image_url]);
+}
+
+/**
+ * Preview the prompts that would be sent to the AI for a given node.
+ *
+ * Admin-only. Does not call AI — just builds and returns prompts.
+ *
+ * Expects POST JSON: { story_id?, parent_node_id?, choice_text?, title?,
+ *                      scenario_essentials?, _csrf_token }
+ */
+function handle_preview_prompt(): void
+{
+    $input = get_json_input();
+    csrf_check($input['_csrf_token'] ?? '');
+
+    $user = current_user();
+    if (!$user || $user['role'] !== 'admin') {
+        json_error('Admin access required.', 403);
+    }
+
+    $story_id       = trim($input['story_id'] ?? '');
+    $parent_node_id = trim($input['parent_node_id'] ?? '');
+    $choice_text    = trim($input['choice_text'] ?? '(example choice)');
+    $title          = trim($input['title'] ?? '');
+    $scenario       = normalize_scenario_essentials((string) ($input['scenario_essentials'] ?? ''));
+
+    $is_opening = ($parent_node_id === '' && $title !== '');
+
+    if (!$is_opening && ($story_id !== '' || $parent_node_id !== '')) {
+        if (!validate_id($story_id, 'story_') || !validate_id($parent_node_id, 'node_')) {
+            json_error('Invalid story or page ID.', 400);
+        }
+    }
+
+    $system_prompt = '';
+    $story_context = '';
+    $image_prompt  = '';
+
+    if ($is_opening) {
+        $prompt_bundle = build_opening_prompt_bundle($title, $scenario);
+        $system_prompt = $prompt_bundle['system_prompt'];
+        $story_context = $prompt_bundle['story_context'];
+    } elseif ($story_id !== '' && $parent_node_id !== '') {
+        $prompt_bundle = build_continuation_prompt_bundle($story_id, $parent_node_id, $choice_text, true);
+        $system_prompt = $prompt_bundle['system_prompt'];
+        $story_context = $prompt_bundle['story_context'];
+
+        // Use any available key to build the enriched image prompt (same logic as generation).
+        $preview_key     = api_key_select_for_user($user['id']);
+        $context_summary = ($preview_key !== null)
+            ? build_image_context_summary($story_id, $parent_node_id, $preview_key, $user, true)
+            : '';
+        $image_prompt = build_image_prompt($story_id, $parent_node_id, $context_summary, true);
+    }
+
+    json_success([
+        'system_prompt' => $system_prompt,
+        'story_context' => $story_context,
+        'image_prompt'  => $image_prompt,
+    ]);
 }

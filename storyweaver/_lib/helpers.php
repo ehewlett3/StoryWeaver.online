@@ -151,6 +151,63 @@ function is_post(): bool
     return $_SERVER['REQUEST_METHOD'] === 'POST';
 }
 
+/**
+ * Detect whether the current request is using HTTPS.
+ */
+function request_is_https(): bool
+{
+    if (!empty($_SERVER['HTTPS']) && strtolower((string) $_SERVER['HTTPS']) !== 'off') {
+        return true;
+    }
+
+    if (!empty($_SERVER['HTTP_X_FORWARDED_PROTO'])) {
+        $forwarded = array_map('trim', explode(',', (string) $_SERVER['HTTP_X_FORWARDED_PROTO']));
+        foreach ($forwarded as $proto) {
+            if (strtolower($proto) === 'https') {
+                return true;
+            }
+        }
+    }
+
+    return (string) ($_SERVER['SERVER_PORT'] ?? '') === '443';
+}
+
+/**
+ * Get the cookie path for the current installation.
+ */
+function session_cookie_path(): string
+{
+    $base = base_url();
+    return $base === '' ? '/' : $base . '/';
+}
+
+/**
+ * Start the application session with hardened cookie settings.
+ */
+function sw_start_session(): void
+{
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        return;
+    }
+
+    session_name('storyweaver_session');
+    ini_set('session.use_only_cookies', '1');
+    ini_set('session.use_strict_mode', '1');
+
+    if (!headers_sent()) {
+        session_set_cookie_params([
+            'lifetime' => 0,
+            'path' => session_cookie_path(),
+            'domain' => '',
+            'secure' => request_is_https(),
+            'httponly' => true,
+            'samesite' => 'Lax',
+        ]);
+    }
+
+    session_start();
+}
+
 /* ------------------------------------------------------------------
  * Flash Messages (session-based, one-time display)
  * ----------------------------------------------------------------*/
@@ -164,9 +221,7 @@ function is_post(): bool
  */
 function flash(string $type, string $message): void
 {
-    if (session_status() !== PHP_SESSION_ACTIVE) {
-        session_start();
-    }
+    sw_start_session();
     $_SESSION['_flash'][$type][] = $message;
 }
 
@@ -177,9 +232,7 @@ function flash(string $type, string $message): void
  */
 function get_flashes(): array
 {
-    if (session_status() !== PHP_SESSION_ACTIVE) {
-        session_start();
-    }
+    sw_start_session();
     $messages = $_SESSION['_flash'] ?? [];
     unset($_SESSION['_flash']);
     return $messages;
@@ -220,13 +273,170 @@ function base_url(): string
  */
 function csrf_token(): string
 {
-    if (session_status() !== PHP_SESSION_ACTIVE) {
-        session_start();
-    }
+    sw_start_session();
     if (empty($_SESSION['_csrf_token'])) {
         $_SESSION['_csrf_token'] = bin2hex(random_bytes(32));
     }
     return $_SESSION['_csrf_token'];
+}
+
+/**
+ * Get a validated host name for absolute URLs and mail headers.
+ */
+function request_host(): string
+{
+    $candidates = [
+        $_SERVER['SERVER_NAME'] ?? '',
+        $_SERVER['HTTP_HOST'] ?? '',
+    ];
+
+    foreach ($candidates as $candidate) {
+        $candidate = trim((string) $candidate);
+        if ($candidate === '') {
+            continue;
+        }
+
+        if (preg_match('/^\[([a-f0-9:.]+)\](?::\d{1,5})?$/i', $candidate, $m)) {
+            $host = $m[1];
+        } else {
+            $host = preg_replace('/:\d{1,5}$/', '', $candidate);
+        }
+
+        if (!is_string($host) || $host === '') {
+            continue;
+        }
+
+        if (filter_var($host, FILTER_VALIDATE_IP)) {
+            return $host;
+        }
+
+        if (preg_match('/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i', $host)) {
+            return strtolower($host);
+        }
+    }
+
+    return 'localhost';
+}
+
+/**
+ * Get the request origin for building absolute URLs.
+ */
+function request_origin(): string
+{
+    $scheme = request_is_https() ? 'https' : 'http';
+    $host = request_host();
+    $forwarded_port = (string) ($_SERVER['HTTP_X_FORWARDED_PORT'] ?? '');
+    if ($forwarded_port !== '' && ctype_digit($forwarded_port)) {
+        $port = (int) $forwarded_port;
+    } elseif ($scheme === 'https' && !empty($_SERVER['HTTP_X_FORWARDED_PROTO'])) {
+        $port = 443;
+    } else {
+        $port = (int) ($_SERVER['SERVER_PORT'] ?? 0);
+    }
+    $default_port = $scheme === 'https' ? 443 : 80;
+
+    if ($port > 0 && $port !== $default_port) {
+        if (str_contains($host, ':') && $host[0] !== '[') {
+            $host = '[' . $host . ']';
+        }
+        $host .= ':' . $port;
+    }
+
+    return $scheme . '://' . $host;
+}
+
+/**
+ * Build a safe From address for locally generated email.
+ */
+function mail_from_address(): string
+{
+    $host = request_host();
+    if (!filter_var($host, FILTER_VALIDATE_IP) && str_contains($host, '.')) {
+        return 'noreply@' . $host;
+    }
+
+    return 'noreply@storyweaver.local';
+}
+
+/**
+ * Render a POST-only logout control with CSRF protection.
+ */
+function render_logout_button(string $base_url, string $label = 'Log out'): void
+{
+    ?>
+    <form method="POST" action="<?= h($base_url) ?>/auth.php?action=logout" style="display:inline; margin:0;">
+        <?= csrf_field() ?>
+        <button type="submit" style="background:none; border:0; padding:0; color:inherit; font:inherit; cursor:pointer;">
+            <?= h($label) ?>
+        </button>
+    </form>
+    <?php
+}
+
+/**
+ * Render a single top-nav link with icon and active state.
+ */
+function render_main_nav_link(string $href, string $icon, string $label, bool $active = false): void
+{
+    ?>
+    <li>
+        <a href="<?= h($href) ?>"
+           class="sw-nav-link<?= $active ? ' sw-nav-link-active' : '' ?>"
+           title="<?= h($label) ?>"
+           aria-label="<?= h($label) ?>">
+            <span class="sw-nav-icon" aria-hidden="true"><?= h($icon) ?></span>
+            <span class="sw-nav-label"><?= h($label) ?></span>
+        </a>
+    </li>
+    <?php
+}
+
+/**
+ * Render the shared top navigation bar.
+ */
+function render_main_nav(?array $user, string $active = ''): void
+{
+    $base = base_url();
+    $needs_setup = function_exists('users_exists') && !users_exists();
+    ?>
+    <nav class="sw-nav">
+        <a href="<?= h($base) ?>/index.php" class="sw-nav-brand" title="StoryWeaver home" aria-label="StoryWeaver home">
+            <img src="<?= h($base) ?>/_assets/storyweaver-mark.svg" class="sw-nav-brand-icon" alt="" aria-hidden="true">
+            <span class="sw-nav-brand-text">StoryWeaver</span>
+        </a>
+        <ul class="sw-nav-links">
+            <?php render_main_nav_link($base . '/index.php', '📚', 'Stories', $active === 'stories'); ?>
+            <?php render_main_nav_link($base . '/help.php', '❓', 'Help', $active === 'help'); ?>
+
+            <?php if ($user !== null): ?>
+                <?php render_main_nav_link($base . '/settings.php', '⚙️', 'Settings', $active === 'settings'); ?>
+                <?php if (role_level((string) ($user['role'] ?? 'viewer')) >= role_level('editor')): ?>
+                    <?php render_main_nav_link($base . '/admin.php', '🛡️', 'Admin', $active === 'admin'); ?>
+                <?php endif; ?>
+                <li>
+                    <span class="sw-nav-user" title="<?= h((string) ($user['username'] ?? 'User')) ?>" aria-label="<?= h((string) ($user['username'] ?? 'User')) ?>">
+                        <span class="sw-nav-icon" aria-hidden="true">👤</span>
+                        <span class="sw-nav-label"><?= h((string) ($user['username'] ?? 'User')) ?></span>
+                    </span>
+                </li>
+                <li>
+                    <form method="POST" action="<?= h($base) ?>/auth.php?action=logout" class="sw-nav-form">
+                        <?= csrf_field() ?>
+                        <button type="submit" class="sw-nav-link sw-nav-button" title="Log out" aria-label="Log out">
+                            <span class="sw-nav-icon" aria-hidden="true">↪</span>
+                            <span class="sw-nav-label">Log out</span>
+                        </button>
+                    </form>
+                </li>
+            <?php elseif ($needs_setup): ?>
+                <?php render_main_nav_link($base . '/auth.php?action=setup', '🚀', 'Setup', $active === 'setup'); ?>
+            <?php else: ?>
+                <?php render_main_nav_link($base . '/auth.php?action=login', '🔐', 'Log in', $active === 'login'); ?>
+                <?php render_main_nav_link($base . '/auth.php?action=register', '✨', 'Register', $active === 'register'); ?>
+            <?php endif; ?>
+        </ul>
+    </nav>
+    <?php
 }
 
 /**
@@ -334,16 +544,48 @@ function data_path(string $file = ''): string
  *
  * @return array ['active' => string, 'themes' => array]
  */
+function built_in_themes(): array
+{
+    return [
+        ['name' => 'StoryWeaver Online', 'file' => 'loom.css'],
+        ['name' => 'Classic Light', 'file' => 'default.css'],
+        ['name' => 'Dark', 'file' => 'dark.css'],
+    ];
+}
+
+/**
+ * Read the themes configuration.
+ *
+ * @return array ['active' => string, 'themes' => array]
+ */
 function themes_read(): array
 {
     $data = json_read(data_path('themes.json'));
-    if (empty($data) || !isset($data['themes'])) {
-        return ['active' => 'default.css', 'themes' => [
-            ['name' => 'Default (Light)', 'file' => 'default.css'],
-            ['name' => 'Dark', 'file' => 'dark.css'],
-        ]];
+    $themes = [];
+    $seen = [];
+
+    foreach (built_in_themes() as $theme) {
+        $file = (string) ($theme['file'] ?? '');
+        if ($file === '') {
+            continue;
+        }
+        $themes[] = $theme;
+        $seen[$file] = true;
     }
-    return $data;
+
+    foreach (($data['themes'] ?? []) as $theme) {
+        $file = (string) ($theme['file'] ?? '');
+        if ($file === '' || isset($seen[$file])) {
+            continue;
+        }
+        $themes[] = $theme;
+        $seen[$file] = true;
+    }
+
+    return [
+        'active' => $data['active'] ?? 'loom.css',
+        'themes' => $themes,
+    ];
 }
 
 /**
@@ -354,7 +596,7 @@ function themes_read(): array
 function theme_active(): string
 {
     $themes = themes_read();
-    return $themes['active'] ?? 'default.css';
+    return $themes['active'] ?? 'loom.css';
 }
 
 /**

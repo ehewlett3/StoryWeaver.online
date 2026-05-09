@@ -10,11 +10,12 @@
 require_once __DIR__ . '/_lib/auth_check.php';
 require_once __DIR__ . '/_lib/moderation.php';
 require_once __DIR__ . '/_lib/api_keys.php';
+require_once __DIR__ . '/_lib/nodes.php';
 
 // Must be at least editor to access admin page
 $user = current_user();
 if (!$user || !in_array($user['role'], ['editor', 'admin'])) {
-    flash('You do not have permission to access the admin dashboard.', 'error');
+    flash('error', 'You do not have permission to access the admin dashboard.');
     redirect(base_url() . '/index.php');
 }
 
@@ -35,6 +36,7 @@ $concerns = [];
 $quarantine_log = [];
 $all_keys = [];
 $all_users = [];
+$story_titles = [];
 
 switch ($tab) {
     case 'concerns':
@@ -54,6 +56,14 @@ switch ($tab) {
         }
         break;
 }
+
+function admin_story_title(array &$story_titles, string $story_id): string
+{
+    if (!isset($story_titles[$story_id])) {
+        $story_titles[$story_id] = story_get_title($story_id);
+    }
+    return $story_titles[$story_id];
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -66,22 +76,15 @@ switch ($tab) {
 </head>
 <body>
 
+<?php render_main_nav($user, 'admin'); ?>
+
 <div class="sw-container">
 
-    <!-- Navigation -->
-    <nav class="sw-nav">
-        <a href="<?= h($base) ?>/index.php" class="sw-nav-brand">📖 StoryWeaver</a>
-        <div class="sw-nav-links">
-            <a href="<?= h($base) ?>/index.php">Stories</a>
-            <a href="<?= h($base) ?>/settings.php">⚙️ Settings</a>
-            <a href="<?= h($base) ?>/admin.php" class="sw-nav-active">🛡️ Admin</a>
-            <a href="<?= h($base) ?>/auth.php?action=logout&_csrf_token=<?= h(csrf_token()) ?>">Logout</a>
-        </div>
-    </nav>
-
     <!-- Flash messages -->
-    <?php foreach (get_flashes() as $flash): ?>
-        <div class="sw-flash sw-flash-<?= h($flash['type']) ?>"><?= h($flash['message']) ?></div>
+    <?php foreach (get_flashes() as $type => $messages): ?>
+        <?php foreach ($messages as $message): ?>
+            <div class="sw-flash sw-flash-<?= h($type) ?>"><?= h($message) ?></div>
+        <?php endforeach; ?>
     <?php endforeach; ?>
 
     <h1>Admin Dashboard</h1>
@@ -125,11 +128,11 @@ switch ($tab) {
                         <div class="sw-admin-item-info">
                             <strong>
                                 <a href="<?= h($base) ?>/node.php?story=<?= h($concern['story_id']) ?>&id=<?= h($concern['node_id']) ?>">
-                                    <?= h($concern['node_id']) ?>
+                                    <?= h(admin_story_title($story_titles, $concern['story_id'])) ?>
                                 </a>
                             </strong>
                             <span class="sw-text-muted">
-                                in <?= h($concern['story_id']) ?>
+                                <?= h($concern['story_id']) ?> · page <?= h($concern['node_id']) ?>
                                 · flagged by <?= h($concern['flagged_by']) ?>
                                 · <?= h($concern['flagged_at']) ?>
                             </span>
@@ -168,11 +171,11 @@ switch ($tab) {
                         <div class="sw-admin-item-info">
                             <strong>
                                 <a href="<?= h($base) ?>/node.php?story=<?= h($entry['story_id']) ?>&id=<?= h($entry['node_id']) ?>">
-                                    <?= h($entry['node_id']) ?>
+                                    <?= h(admin_story_title($story_titles, $entry['story_id'])) ?>
                                 </a>
                             </strong>
                             <span class="sw-text-muted">
-                                in <?= h($entry['story_id']) ?>
+                                <?= h($entry['story_id']) ?> · page <?= h($entry['node_id']) ?>
                                 · <?= count($entry['subtree']) ?> page(s)
                                 · quarantined by <?= h($entry['flagged_by']) ?>
                                 · <?= h($entry['flagged_at']) ?>
@@ -349,6 +352,6 @@ switch ($tab) {
 
 </div><!-- .sw-container -->
 
-<script src="<?= h($base) ?>/_assets/sw.js"></script>
+<script src="<?= h($base) ?>/_assets/sw.js?v=<?= filemtime(sw_root() . '/_assets/sw.js') ?>"></script>
 </body>
 </html>

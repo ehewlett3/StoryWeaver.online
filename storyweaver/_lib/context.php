@@ -12,6 +12,7 @@ require_once __DIR__ . '/nodes.php';
 
 /** Maximum total characters for the assembled context string. */
 define('MAX_CONTEXT_CHARS', 12000);
+define('SCENARIO_ESSENTIALS_MAX_CHARS', 4000);
 
 /**
  * The verbatim system prompt from §3.2.
@@ -51,16 +52,43 @@ PROMPT;
 }
 
 /**
+ * Read the story-wide scenario essentials from the root node metadata.
+ */
+function story_get_scenario_essentials(string $story_id): string
+{
+    $root_id = story_find_root($story_id);
+    if ($root_id === null) {
+        return '';
+    }
+
+    $root = node_read($story_id, $root_id, true);
+    if ($root === null) {
+        return '';
+    }
+
+    return trim((string) (($root['sw_meta']['scenario_essentials'] ?? '')));
+}
+
+/**
+ * Normalize Scenario Essentials text to a safe maximum length.
+ */
+function normalize_scenario_essentials(string $scenario_essentials): string
+{
+    return trim(mb_substr($scenario_essentials, 0, SCENARIO_ESSENTIALS_MAX_CHARS));
+}
+
+/**
  * Reconstruct the narrative context by walking the parent chain (§3.3).
  *
  * Reads each ancestor node's paragraphs and the choice that was taken
  * to reach the next node. Returns entries ordered oldest-to-newest.
  *
- * @param string $story_id The story ID.
- * @param string $node_id  The current node ID (starting point).
+ * @param string $story_id          The story ID.
+ * @param string $node_id           The current node ID (starting point).
+ * @param bool   $check_quarantine  Also read nodes from quarantine when needed.
  * @return array Array of context entries, each: ['paragraphs' => string, 'choice_taken' => string]
  */
-function reconstruct_context(string $story_id, string $node_id): array
+function reconstruct_context(string $story_id, string $node_id, bool $check_quarantine = false): array
 {
     $entries = [];
     $current_id = $node_id;
@@ -72,7 +100,7 @@ function reconstruct_context(string $story_id, string $node_id): array
         }
         $visited[$current_id] = true;
 
-        $node = node_read($story_id, $current_id);
+        $node = node_read($story_id, $current_id, $check_quarantine);
         if ($node === null) {
             break;
         }
@@ -134,30 +162,69 @@ function truncate_context(array $entries, int $max_chars = MAX_CONTEXT_CHARS): a
  *
  * @param array  $entries     Context entries (oldest to newest).
  * @param string $choice_text The choice the player just made.
+ * @param string $scenario_essentials Optional scenario essentials carried forward from the root node.
  * @return string The assembled user message.
  */
-function build_story_prompt(array $entries, string $choice_text): string
+function build_story_prompt(array $entries, string $choice_text, string $scenario_essentials = ''): string
 {
     $parts = [];
+
+    if ($scenario_essentials !== '') {
+        $parts[] = "[SCENARIO ESSENTIALS]";
+        $parts[] = $scenario_essentials;
+        $parts[] = "";
+    }
 
     $parts[] = "[STORY CONTEXT — oldest to newest]";
 
     foreach ($entries as $entry) {
-        if ($entry['paragraphs'] !== '') {
-            $parts[] = $entry['paragraphs'];
-        }
+        // The choice_taken is what the player chose to arrive at this node,
+        // so it must appear before this node's paragraphs.
         if ($entry['choice_taken'] !== '') {
             $parts[] = "> Player chose: " . $entry['choice_taken'];
+        }
+        if ($entry['paragraphs'] !== '') {
+            $parts[] = $entry['paragraphs'];
         }
     }
 
     $parts[] = "";
-    $parts[] = "[PLAYER CHOICE]";
-    $parts[] = $choice_text;
-    $parts[] = "";
-    $parts[] = "Continue the story.";
+    $parts[] = "> Player chose: " . $choice_text;
 
     return implode("\n", $parts);
+}
+
+/**
+ * Build the exact prompt payload for generating an opening node.
+ *
+ * @return array{scenario_essentials: string, system_prompt: string, story_context: string}
+ */
+function build_opening_prompt_bundle(string $title, string $scenario_essentials = ''): array
+{
+    return [
+        'scenario_essentials' => $scenario_essentials,
+        'system_prompt'       => get_system_prompt(),
+        'story_context'       => build_opening_prompt($title, $scenario_essentials),
+    ];
+}
+
+/**
+ * Build the exact prompt payload for generating a continuation node.
+ *
+ * @param bool $check_quarantine Also read quarantined nodes when building context.
+ * @return array{scenario_essentials: string, system_prompt: string, story_context: string}
+ */
+function build_continuation_prompt_bundle(string $story_id, string $parent_node_id, string $choice_text, bool $check_quarantine = false): array
+{
+    $scenario_essentials = story_get_scenario_essentials($story_id);
+    $entries = reconstruct_context($story_id, $parent_node_id, $check_quarantine);
+    $entries = truncate_context($entries);
+
+    return [
+        'scenario_essentials' => $scenario_essentials,
+        'system_prompt'       => get_system_prompt(),
+        'story_context'       => build_story_prompt($entries, $choice_text, $scenario_essentials),
+    ];
 }
 
 /**
@@ -251,30 +318,40 @@ function build_repair_prompt(string $broken_response): string
 /**
  * Build an image generation prompt from a node's content.
  *
- * Uses the most recent paragraphs to create a vivid scene description
- * suitable for image generation models.
+ * Uses all paragraphs of the node as the scene description. If a
+ * $context_summary is provided (generated by the text AI from prior nodes),
+ * it is prepended to give the image model visual continuity across scenes.
  *
- * @param string $story_id The story ID.
- * @param string $node_id  The node ID to illustrate.
+ * @param string $story_id          The story ID.
+ * @param string $node_id           The node ID to illustrate.
+ * @param string $context_summary   Optional AI-generated visual summary of prior nodes.
+ * @param bool   $check_quarantine  Also read quarantined nodes when needed.
  * @return string The image prompt.
  */
-function build_image_prompt(string $story_id, string $node_id): string
+function build_image_prompt(string $story_id, string $node_id, string $context_summary = '', bool $check_quarantine = false): string
 {
-    $node = node_read($story_id, $node_id);
+    $node = node_read($story_id, $node_id, $check_quarantine);
     if ($node === null || empty($node['paragraphs'])) {
         return 'A scene from an interactive story.';
     }
 
-    // Combine the last 2 paragraphs (most recent context)
-    $paras = array_slice($node['paragraphs'], -2);
-    $text = implode(' ', array_map('strip_tags', $paras));
-    $text = mb_substr($text, 0, 500); // keep prompt reasonable
+    // Use all paragraphs for the richest scene description
+    $text = implode(' ', array_map('strip_tags', $node['paragraphs']));
+    $text = html_entity_decode($text, ENT_QUOTES, 'UTF-8');
+    $text = mb_substr($text, 0, 2000);
 
     // Get story title for context
     $title = story_get_title($story_id);
 
+    $scene = '';
+    if ($context_summary !== '') {
+        $scene = "Story context: {$context_summary} Current scene: {$text}";
+    } else {
+        $scene = $text;
+    }
+
     return "Create an illustration for a scene in a story called \"{$title}\". "
-         . "The scene: {$text}\n\n"
+         . "The scene: {$scene}\n\n"
          . "Style: Rich, atmospheric digital illustration suitable for an interactive fiction story. "
          . "No text or UI elements in the image.";
 }

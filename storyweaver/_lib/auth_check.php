@@ -14,10 +14,7 @@ require_once __DIR__ . '/users.php';
 sw_ensure_directories();
 
 // Start session if not already active
-if (session_status() !== PHP_SESSION_ACTIVE) {
-    session_name('storyweaver_session');
-    session_start();
-}
+sw_start_session();
 
 /**
  * Role hierarchy — higher index = more permissions.
@@ -87,9 +84,13 @@ function require_role(string $minimum_role = 'contributor'): array
 
     if (role_level($user['role']) < role_level($minimum_role)) {
         http_response_code(403);
+        ob_start();
+        render_main_nav($user, '');
+        $nav = ob_get_clean();
         echo '<!DOCTYPE html><html><head><title>403 Forbidden</title>'
            . '<link rel="stylesheet" href="' . h(base_url()) . '/_themes/' . h(theme_css()) . '">'
            . '</head><body>'
+           . $nav
            . '<div class="sw-container sw-text-center sw-mt-3">'
            . '<h1>403 — Forbidden</h1>'
            . '<p>You do not have permission to access this page.</p>'
@@ -126,15 +127,14 @@ function auth_logout(): void
 
     if (ini_get('session.use_cookies')) {
         $params = session_get_cookie_params();
-        setcookie(
-            session_name(),
-            '',
-            time() - 42000,
-            $params['path'],
-            $params['domain'],
-            $params['secure'],
-            $params['httponly']
-        );
+        setcookie(session_name(), '', [
+            'expires' => time() - 42000,
+            'path' => $params['path'] ?? session_cookie_path(),
+            'domain' => $params['domain'] ?? '',
+            'secure' => (bool) ($params['secure'] ?? request_is_https()),
+            'httponly' => (bool) ($params['httponly'] ?? true),
+            'samesite' => $params['samesite'] ?? 'Lax',
+        ]);
     }
 
     session_destroy();

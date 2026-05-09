@@ -10,3 +10,8 @@
 
 # Environment
 .env
+
+# Site-root files are deployment-specific; the app itself lives in storyweaver/
+/index.html
+/sw-background.png
+/Tolkien.ttf

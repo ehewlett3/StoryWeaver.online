@@ -26,9 +26,8 @@ if ($story_id === '' || $node_id === ''
     exit;
 }
 
-// Read the node (check quarantine for editors/admins)
-$check_quarantine = $user && role_level($user['role']) >= role_level('editor');
-$node = node_read($story_id, $node_id, $check_quarantine);
+// Read the node, including quarantined stories the author may still access
+$node = node_read_for_user($story_id, $node_id, $user);
 
 if ($node === null) {
     http_response_code(404);
@@ -76,6 +75,9 @@ foreach ($all_keys as $k) {
 }
 $ai_available = !empty($text_keys);
 $has_image_model = !empty($image_keys);
+$can_regenerate_story = $user && $can_edit && $ai_available && node_can_regenerate($node);
+$story_scenario_essentials = '';
+$can_access_quarantine_story = story_user_can_access_quarantine($story_id, $user);
 
 // Per-story theme: read root node's sw_meta for story_theme
 $story_theme = '';
@@ -83,10 +85,12 @@ $root_id = story_find_root($story_id);
 $is_root_node = ($node_id === $root_id);
 if ($is_root_node) {
     $story_theme = $node['sw_meta']['story_theme'] ?? '';
+    $story_scenario_essentials = trim((string) ($node['sw_meta']['scenario_essentials'] ?? ''));
 } elseif ($root_id) {
-    $root_node = node_read($story_id, $root_id);
+    $root_node = node_read($story_id, $root_id, true);
     if ($root_node) {
         $story_theme = $root_node['sw_meta']['story_theme'] ?? '';
+        $story_scenario_essentials = trim((string) ($root_node['sw_meta']['scenario_essentials'] ?? ''));
     }
 }
 $effective_theme = $story_theme !== '' ? $story_theme : theme_css();
@@ -109,22 +113,7 @@ if ($user && $is_root_node) {
     <link rel="stylesheet" href="<?= h($base) ?>/_themes/<?= h($effective_theme) ?>">
 </head>
 <body>
-    <nav class="sw-nav">
-        <a href="<?= h($base) ?>/index.php" class="sw-nav-brand">🧶 StoryWeaver</a>
-        <ul class="sw-nav-links">
-            <?php if ($user): ?>
-                <li><a href="<?= h($base) ?>/settings.php">⚙️</a></li>
-                <?php if (in_array($user['role'], ['editor', 'admin'])): ?>
-                    <li><a href="<?= h($base) ?>/admin.php">🛡️</a></li>
-                <?php endif; ?>
-                <li><span class="sw-nav-user"><?= h($user['username']) ?></span></li>
-                <li><a href="<?= h($base) ?>/auth.php?action=logout">Log out</a></li>
-            <?php else: ?>
-                <li><a href="<?= h($base) ?>/auth.php?action=login">Log in</a></li>
-                <li><a href="<?= h($base) ?>/auth.php?action=register">Register</a></li>
-            <?php endif; ?>
-        </ul>
-    </nav>
+    <?php render_main_nav($user, 'stories'); ?>
 
     <div class="sw-container">
         <?php
@@ -173,6 +162,34 @@ if ($user && $is_root_node) {
                 › <span class="sw-text-muted">"<?= h($node['choice_taken']) ?>"</span>
             <?php endif; ?>
         </nav>
+
+        <?php if ($is_root_node && ($story_scenario_essentials !== '' || $can_edit)): ?>
+            <details class="sw-story-scenario" id="sw-story-scenario-details">
+                <summary class="sw-story-scenario-summary">Scenario Essentials</summary>
+                <?php if ($can_edit): ?>
+                    <div class="sw-story-scenario-editor">
+                        <textarea id="sw-story-scenario-input"
+                                  class="sw-input"
+                                  rows="8"
+                                  maxlength="4000"
+                                  data-story-id="<?= h($story_id) ?>"
+                                  data-original-value="<?= h($story_scenario_essentials) ?>"
+                                  placeholder="Add enduring story setup, tone, characters, or constraints that should stay with the story."><?= h($story_scenario_essentials) ?></textarea>
+                        <div class="sw-story-scenario-actions">
+                            <button type="button" id="sw-save-story-scenario-btn" class="sw-btn sw-btn-sm sw-btn-secondary">
+                                Save Scenario Essentials
+                            </button>
+                            <button type="button" id="sw-cancel-story-scenario-btn" class="sw-btn sw-btn-sm sw-btn-secondary">
+                                Cancel
+                            </button>
+                            <span id="sw-story-scenario-status" class="sw-editor-status"></span>
+                        </div>
+                    </div>
+                <?php else: ?>
+                    <div class="sw-story-scenario-content"><?= nl2br(h($story_scenario_essentials)) ?></div>
+                <?php endif; ?>
+            </details>
+        <?php endif; ?>
 
         <?php if ($is_quarantined): ?>
             <div class="sw-alert sw-alert-warning">
@@ -285,6 +302,20 @@ if ($user && $is_root_node) {
                        data-story-id="<?= h($story_id) ?>" data-node-id="<?= h($node_id) ?>"
                        style="display:none">
             <?php endif; ?>
+
+            <?php if ($user && $user['role'] === 'admin'): ?>
+                <button type="button" id="sw-preview-prompt-btn" class="sw-btn sw-btn-sm sw-btn-secondary"
+                        data-story-id="<?= h($story_id) ?>" data-node-id="<?= h($node_id) ?>">
+                    🔍 Preview Prompts
+                </button>
+            <?php endif; ?>
+
+            <?php if ($can_regenerate_story): ?>
+                <button type="button" id="sw-regenerate-story-btn" class="sw-btn sw-btn-sm sw-btn-secondary"
+                        data-story-id="<?= h($story_id) ?>" data-node-id="<?= h($node_id) ?>">
+                    🔄 Regenerate Story
+                </button>
+            <?php endif; ?>
         </div>
         <?php endif; ?>
 
@@ -296,7 +327,7 @@ if ($user && $is_root_node) {
                     <?php foreach ($node['choices'] as $choice): ?>
                         <li>
                             <?php if (!empty($choice['quarantined'])): ?>
-                                <?php if ($user && role_level($user['role']) >= role_level('editor')): ?>
+                                <?php if ($can_access_quarantine_story): ?>
                                     <?php $child_id = basename($choice['node'], '.html'); ?>
                                     <a href="<?= h($base) ?>/node.php?story=<?= h($story_id) ?>&id=<?= h($child_id) ?>"
                                        class="sw-choice-quarantined">
@@ -405,7 +436,7 @@ if ($user && $is_root_node) {
         </footer>
     </div>
 
-    <script src="<?= h($base) ?>/_assets/sw.js"></script>
+    <script src="<?= h($base) ?>/_assets/sw.js?v=<?= filemtime(sw_root() . '/_assets/sw.js') ?>"></script>
 </body>
 </html>
 <?php
@@ -430,25 +461,13 @@ function render_404(string $message): void
     <link rel="stylesheet" href="<?= h($base) ?>/_themes/<?= h(theme_css()) ?>">
 </head>
 <body>
-    <nav class="sw-nav">
-        <a href="<?= h($base) ?>/index.php" class="sw-nav-brand">🧶 StoryWeaver</a>
-        <ul class="sw-nav-links">
-            <?php if ($user): ?>
-                <li><a href="<?= h($base) ?>/settings.php">⚙️</a></li>
-                <li><span class="sw-nav-user"><?= h($user['username']) ?></span></li>
-                <li><a href="<?= h($base) ?>/auth.php?action=logout">Log out</a></li>
-            <?php else: ?>
-                <li><a href="<?= h($base) ?>/auth.php?action=login">Log in</a></li>
-                <li><a href="<?= h($base) ?>/auth.php?action=register">Register</a></li>
-            <?php endif; ?>
-        </ul>
-    </nav>
+    <?php render_main_nav($user, 'stories'); ?>
     <div class="sw-container sw-text-center sw-mt-3">
         <h1>404 — Page Not Found</h1>
         <p><?= h($message) ?></p>
         <a href="<?= h($base) ?>/index.php" class="sw-btn sw-btn-secondary sw-mt-2">← Back to Stories</a>
     </div>
-    <script src="<?= h($base) ?>/_assets/sw.js"></script>
+    <script src="<?= h($base) ?>/_assets/sw.js?v=<?= filemtime(sw_root() . '/_assets/sw.js') ?>"></script>
 </body>
 </html>
     <?php

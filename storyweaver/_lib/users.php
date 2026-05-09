@@ -186,10 +186,10 @@ function users_list(): array
  */
 function user_delete(string $id): bool
 {
-    $users = users_read();
+    $data = users_read();
     $found = false;
 
-    $users = array_values(array_filter($users, function ($u) use ($id, &$found) {
+    $data['users'] = array_values(array_filter($data['users'] ?? [], function ($u) use ($id, &$found) {
         if ($u['id'] === $id) {
             $found = true;
             return false;
@@ -201,6 +201,6 @@ function user_delete(string $id): bool
         return false;
     }
 
-    users_write($users);
+    users_write($data);
     return true;
 }

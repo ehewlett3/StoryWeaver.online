@@ -46,7 +46,7 @@ switch ($action) {
 function handle_new_story(): void
 {
     $title    = trim($_POST['title'] ?? '');
-    $scenario = trim($_POST['scenario_essentials'] ?? '');
+    $scenario = normalize_scenario_essentials((string) ($_POST['scenario_essentials'] ?? ''));
     $use_ai   = ($_POST['use_ai'] ?? '1') === '1';
 
     if ($title === '') {
@@ -69,23 +69,26 @@ function handle_new_story(): void
             $key_record = api_key_find_by_id($key_id);
             if ($key_record === null || $key_record['status'] !== 'active') {
                 $key_record = null;
+            } elseif (($key_error = api_key_access_error($key_record, $user)) !== null) {
+                flash('error', $key_error);
+                redirect(base_url() . '/index.php');
             }
         } else {
             $key_record = api_key_select_for_user($user_id);
         }
         if ($key_record !== null) {
             try {
-                $system_prompt = get_system_prompt($scenario);
-                $user_message  = build_opening_prompt($title, $scenario);
+                $key_record = api_key_prepare_for_use($key_record);
+                $prompt_bundle = build_opening_prompt_bundle($title, $scenario);
 
                 $provider = new AIProvider($key_record);
-                $raw_response = $provider->generateText($system_prompt, $user_message);
+                $raw_response = $provider->generateText($prompt_bundle['system_prompt'], $prompt_bundle['story_context']);
                 $parsed = parse_ai_response($raw_response);
 
                 if ($parsed === null) {
                     // Retry with repair prompt
                     $repair_msg = build_repair_prompt($raw_response);
-                    $raw_response = $provider->generateText($system_prompt, $repair_msg);
+                    $raw_response = $provider->generateText($prompt_bundle['system_prompt'], $repair_msg);
                     $parsed = parse_ai_response($raw_response);
                 }
 
@@ -98,7 +101,12 @@ function handle_new_story(): void
                         $paragraphs = ['The story begins…'];
                     }
 
-                    $result = story_create(h($title), $author_id, $paragraphs);
+                    $result = story_create(h($title), $author_id, $paragraphs, [
+                        'ai_model'            => $key_record['model_text'] ?? '',
+                        'ai_provider'         => $key_record['provider'] ?? '',
+                        'ai_key_label'        => $key_record['label'] ?? '',
+                        'scenario_essentials' => $prompt_bundle['scenario_essentials'],
+                    ]);
 
                     // Update with AI choices
                     if (!empty($parsed['choices'])) {
@@ -114,12 +122,15 @@ function handle_new_story(): void
                 if (str_contains($e->getMessage(), 'Authentication failed')) {
                     api_key_mark_unavailable($key_record['id'], $e->getMessage());
                 }
+                flash('error', 'AI generation failed: ' . $e->getMessage());
             }
         }
     }
 
     // Manual fallback: create blank story
-    $result = story_create(h($title), $author_id, []);
+    $result = story_create(h($title), $author_id, [], [
+        'scenario_essentials' => $scenario,
+    ]);
 
     // Guests can't edit, so redirect to node view; logged-in users go to editor
     if ($user) {
@@ -168,35 +179,34 @@ function handle_continue_choice(): void
                . '&id=' . urlencode($parent_node_id));
     }
 
-    // Verify parent node exists (check quarantine for editors)
+    // Verify parent node exists, including quarantined stories the author may still access
     $user = current_user();
-    $check_q = $user && role_level($user['role']) >= role_level('editor');
-    $parent = node_read($story_id, $parent_node_id, $check_q);
+    $parent = node_read_for_user($story_id, $parent_node_id, $user);
     if ($parent === null) {
         flash('error', 'Parent page not found.');
         redirect(base_url() . '/index.php');
     }
+    $check_q = ($parent['location'] ?? 'stories') === 'quarantine';
 
     $author_id = $user ? $user['id'] : 'anonymous';
     $user_id   = $user ? $user['id'] : null;
     $title = story_get_title($story_id);
+    $child_location = ($parent['location'] ?? 'stories') === 'quarantine' ? 'quarantine' : 'stories';
 
     // Try AI generation
     $key_record = api_key_select_for_user($user_id);
     if ($key_record !== null) {
         try {
-            $entries = reconstruct_context($story_id, $parent_node_id);
-            $entries = truncate_context($entries);
-            $system_prompt = get_system_prompt();
-            $user_message  = build_story_prompt($entries, $chosen);
+            $key_record = api_key_prepare_for_use($key_record);
+            $prompt_bundle = build_continuation_prompt_bundle($story_id, $parent_node_id, $chosen, $check_q);
 
             $provider = new AIProvider($key_record);
-            $raw_response = $provider->generateText($system_prompt, $user_message);
+            $raw_response = $provider->generateText($prompt_bundle['system_prompt'], $prompt_bundle['story_context']);
             $parsed = parse_ai_response($raw_response);
 
             if ($parsed === null) {
                 $repair_msg = build_repair_prompt($raw_response);
-                $raw_response = $provider->generateText($system_prompt, $repair_msg);
+                $raw_response = $provider->generateText($prompt_bundle['system_prompt'], $repair_msg);
                 $parsed = parse_ai_response($raw_response);
             }
 
@@ -216,6 +226,10 @@ function handle_continue_choice(): void
                     'title'        => $title,
                     'paragraphs'   => $paragraphs,
                     'choices'      => $parsed['choices'] ?? [],
+                    'ai_model'     => $key_record['model_text'] ?? '',
+                    'ai_provider'  => $key_record['provider'] ?? '',
+                    'ai_key_label' => $key_record['label'] ?? '',
+                    'location'     => $child_location,
                 ]);
 
                 node_link_choice($story_id, $parent_node_id, $chosen, $child_node_id);
@@ -229,6 +243,7 @@ function handle_continue_choice(): void
             if (str_contains($e->getMessage(), 'Authentication failed')) {
                 api_key_mark_unavailable($key_record['id'], $e->getMessage());
             }
+            flash('error', 'AI generation failed: ' . $e->getMessage());
         }
     }
 
@@ -240,6 +255,7 @@ function handle_continue_choice(): void
         'title'        => $title,
         'paragraphs'   => [],
         'choices'      => [],
+        'location'     => $child_location,
     ]);
 
     // Update parent's choices to link to the new child

@@ -40,6 +40,16 @@ $my_keys = api_keys_for_user($user['id']);
 $primary_key = api_key_select_for_user($user['id']);
 $primary_key_id = $primary_key ? $primary_key['id'] : null;
 
+// Keys that can be chosen as a fallback: own keys + any "all"-scoped active keys
+$all_keys = api_keys_read();
+$available_fallback_keys = array_values(array_filter($all_keys, function ($k) use ($user) {
+    if (($k['status'] ?? '') !== 'active') {
+        return false;
+    }
+    return ($k['owner_user_id'] ?? '') === $user['id']
+        || ($k['scope'] ?? '') === 'all';
+}));
+
 // Render page
 ?>
 <!DOCTYPE html>
@@ -52,14 +62,7 @@ $primary_key_id = $primary_key ? $primary_key['id'] : null;
     <link rel="stylesheet" href="<?= h($base) ?>/_themes/<?= h(theme_css()) ?>">
 </head>
 <body>
-    <nav class="sw-nav">
-        <a href="<?= h($base) ?>/index.php" class="sw-nav-brand">🧶 StoryWeaver</a>
-        <ul class="sw-nav-links">
-            <li><a href="<?= h($base) ?>/settings.php">⚙️ Settings</a></li>
-            <li><span class="sw-nav-user"><?= h($user['username']) ?></span></li>
-            <li><a href="<?= h($base) ?>/auth.php?action=logout">Log out</a></li>
-        </ul>
-    </nav>
+    <?php render_main_nav($user, 'settings'); ?>
 
     <div class="sw-container">
         <?php
@@ -94,7 +97,21 @@ $primary_key_id = $primary_key ? $primary_key['id'] : null;
             <?php else: ?>
                 <div class="sw-key-list">
                     <?php foreach ($my_keys as $key): ?>
-                        <div class="sw-key-item" data-key-id="<?= h($key['id']) ?>">
+                        <?php
+                        $key_payload = [
+                            'id' => $key['id'],
+                            'label' => $key['label'],
+                            'provider' => $key['provider'],
+                            'base_url' => $key['base_url'] ?? '',
+                            'model_text' => $key['model_text'] ?? '',
+                            'model_image' => $key['model_image'] ?? '',
+                            'scope' => $key['scope'] ?? 'self',
+                            'fallback_key_id' => $key['fallback_key_id'] ?? '',
+                        ];
+                        ?>
+                        <div class="sw-key-item"
+                             data-key-id="<?= h($key['id']) ?>"
+                             data-key='<?= h(json_encode($key_payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>'>
                             <div class="sw-key-info">
                                 <strong><?= h($key['label']) ?></strong>
                                 <span class="sw-badge sw-badge-<?= $key['status'] === 'active' ? 'success' : 'warning' ?>">
@@ -106,12 +123,29 @@ $primary_key_id = $primary_key ? $primary_key['id'] : null;
                                 <span class="sw-text-muted">
                                     <?= h($key['provider']) ?> · <?= h($key['model_text']) ?>
                                     · scope: <?= h($key['scope']) ?>
+                                    <?php if (!empty($key['fallback_key_id'])): ?>
+                                        <?php
+                                        $fb_label = '';
+                                        foreach ($all_keys as $k) {
+                                            if ($k['id'] === $key['fallback_key_id']) {
+                                                $fb_label = $k['label'];
+                                                break;
+                                            }
+                                        }
+                                        ?>
+                                        · fallback: <?= h($fb_label ?: $key['fallback_key_id']) ?>
+                                    <?php endif; ?>
                                 </span>
+                                <?php if (!empty($key['base_url'])): ?>
+                                    <span class="sw-text-muted sw-text-sm">Endpoint: <?= h($key['base_url']) ?></span>
+                                <?php endif; ?>
                                 <?php if ($key['last_failure']): ?>
                                     <span class="sw-text-muted sw-text-sm">Last failure: <?= h($key['last_failure']) ?></span>
                                 <?php endif; ?>
                             </div>
                             <div class="sw-key-actions">
+                                <button type="button" class="sw-btn sw-btn-sm sw-btn-secondary sw-key-edit"
+                                        data-key-id="<?= h($key['id']) ?>">✏️ Edit</button>
                                 <button type="button" class="sw-btn sw-btn-sm sw-btn-secondary sw-key-test"
                                         data-key-id="<?= h($key['id']) ?>">🧪 Test</button>
                                 <?php if ($key['status'] === 'unavailable'): ?>
@@ -129,8 +163,9 @@ $primary_key_id = $primary_key ? $primary_key['id'] : null;
                 </div>
             <?php endif; ?>
 
-            <h3 style="margin-top:2rem;">Add New Key</h3>
+            <h3 id="sw-key-form-heading" style="margin-top:2rem;">Add New Key</h3>
             <form id="sw-add-key-form" class="sw-form">
+                <input type="hidden" id="key-id" value="">
                 <div class="sw-form-row">
                     <div class="sw-form-group">
                         <label for="key-label">Label</label>
@@ -151,14 +186,14 @@ $primary_key_id = $primary_key ? $primary_key['id'] : null;
                     <label for="key-base-url">Base URL</label>
                     <input type="url" id="key-base-url" class="sw-input"
                            placeholder="https://api.openai.com/v1">
-                    <span class="sw-text-muted sw-text-sm">Auto-filled for known providers. Set manually for Ollama/custom.</span>
+                    <span class="sw-text-muted sw-text-sm">Auto-filled for known providers. For Ollama use <code>http://&lt;host&gt;:11434/v1</code> — the <code>/v1</code> is required.</span>
                 </div>
 
                 <div class="sw-form-group" id="key-api-key-group">
                     <label for="key-api-key">API Key</label>
                     <input type="password" id="key-api-key" class="sw-input"
-                           placeholder="sk-...">
-                    <span class="sw-text-muted sw-text-sm">Not needed for local Ollama.</span>
+                            placeholder="sk-...">
+                    <span id="sw-key-api-key-note" class="sw-text-muted sw-text-sm">Not needed for local Ollama.</span>
                 </div>
 
                 <div class="sw-form-row">
@@ -166,11 +201,17 @@ $primary_key_id = $primary_key ? $primary_key['id'] : null;
                         <label for="key-model-text">Text Model</label>
                         <input type="text" id="key-model-text" class="sw-input"
                                placeholder="gpt-4o" required>
+                        <select id="key-model-text-select" class="sw-input sw-model-select" disabled>
+                            <option value="">Choose from fetched models…</option>
+                        </select>
                     </div>
                     <div class="sw-form-group">
                         <label for="key-model-image">Image Model <span class="sw-text-muted">(optional)</span></label>
                         <input type="text" id="key-model-image" class="sw-input"
                                placeholder="dall-e-3">
+                        <select id="key-model-image-select" class="sw-input sw-model-select" disabled>
+                            <option value="">Choose from fetched models…</option>
+                        </select>
                     </div>
                 </div>
 
@@ -182,8 +223,28 @@ $primary_key_id = $primary_key ? $primary_key['id'] : null;
                     </select>
                 </div>
 
+                <?php if (!empty($available_fallback_keys)): ?>
+                <div class="sw-form-group">
+                    <label for="key-fallback">Fallback Key <span class="sw-text-muted">(optional)</span></label>
+                    <select id="key-fallback" class="sw-input">
+                        <option value="">— None —</option>
+                        <?php foreach ($available_fallback_keys as $fk): ?>
+                            <option value="<?= h($fk['id']) ?>">
+                                <?= h($fk['label']) ?> (<?= h($fk['provider']) ?> · <?= h($fk['model_text']) ?>)
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                    <span class="sw-text-muted sw-text-sm">
+                        Used automatically if this key can't reach its endpoint (e.g. Ollama is offline).
+                        One level only — the fallback won't chain further.
+                    </span>
+                </div>
+                <?php endif; ?>
+
                 <div class="sw-form-actions">
-                    <button type="submit" class="sw-btn sw-btn-primary">Add Key</button>
+                    <button type="button" id="sw-fetch-models-btn" class="sw-btn sw-btn-secondary">🔄 Fetch Models</button>
+                    <button type="submit" id="sw-key-submit-btn" class="sw-btn sw-btn-primary">Add Key</button>
+                    <button type="button" id="sw-key-cancel-edit" class="sw-btn sw-btn-secondary" hidden>Cancel Edit</button>
                     <span id="sw-key-form-status" class="sw-editor-status"></span>
                 </div>
             </form>
@@ -244,7 +305,7 @@ $primary_key_id = $primary_key ? $primary_key['id'] : null;
         <?php endif; ?>
     </div>
 
-    <script src="<?= h($base) ?>/_assets/sw.js"></script>
+    <script src="<?= h($base) ?>/_assets/sw.js?v=<?= filemtime(sw_root() . '/_assets/sw.js') ?>"></script>
 </body>
 </html>
 <?php
@@ -261,6 +322,7 @@ $primary_key_id = $primary_key ? $primary_key['id'] : null;
  */
 function handle_update_profile(array $user): void
 {
+    $current_username = (string) ($user['username'] ?? '');
     $username = trim($_POST['username'] ?? '');
     $email    = trim($_POST['email'] ?? '');
 
@@ -290,6 +352,15 @@ function handle_update_profile(array $user): void
     if ($existing_email !== null && $existing_email['id'] !== $user['id']) {
         flash('error', 'That email is already in use.');
         redirect(base_url() . '/settings.php?tab=profile');
+    }
+
+    if ($username !== $current_username) {
+        try {
+            api_keys_reencrypt_for_username($user['id'], $current_username, $username);
+        } catch (RuntimeException $e) {
+            flash('error', 'Profile update failed while re-encrypting API keys: ' . $e->getMessage());
+            redirect(base_url() . '/settings.php?tab=profile');
+        }
     }
 
     user_update($user['id'], [

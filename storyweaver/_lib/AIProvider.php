@@ -91,6 +91,28 @@ class AIProvider
         }
     }
 
+    /**
+     * List available model IDs for the configured provider.
+     *
+     * @return array<int, string>
+     */
+    public function listModels(): array
+    {
+        $provider = $this->key['provider'] ?? 'openai';
+
+        $models = match ($provider) {
+            'anthropic' => $this->listAnthropicModels(),
+            'ollama'    => $this->listOllamaModels(),
+            default     => $this->listOpenAICompatibleModels(),
+        };
+
+        $models = array_values(array_unique(array_filter(array_map('trim', $models), function ($model) {
+            return $model !== '';
+        })));
+        sort($models, SORT_NATURAL | SORT_FLAG_CASE);
+        return $models;
+    }
+
     /* ------------------------------------------------------------------
      * Provider-specific request methods
      * ----------------------------------------------------------------*/
@@ -126,6 +148,11 @@ class AIProvider
             $headers[] = 'Authorization: Bearer ' . $api_key;
         }
 
+        // Suppress thinking for Ollama (models that don't support it ignore this flag)
+        if (($this->key['provider'] ?? '') === 'ollama') {
+            $body['think'] = false;
+        }
+
         $raw = $this->httpPost($url, $body, $headers);
         $data = json_decode($raw, true);
 
@@ -144,7 +171,7 @@ class AIProvider
             throw new RuntimeException('No content in provider response.');
         }
 
-        return trim($text);
+        return trim(self::stripThinkingTags($text));
     }
 
     /**
@@ -237,8 +264,15 @@ class AIProvider
             $headers[] = 'Authorization: Bearer ' . $api_key;
         }
 
+        // Suppress thinking for Ollama (models that don't support it ignore this flag)
+        if (($this->key['provider'] ?? '') === 'ollama') {
+            $body['think'] = false;
+        }
+
         $accumulated = '';
-        $this->httpPostStreaming($url, $body, $headers, function (string $line) use (&$accumulated, $onChunk) {
+        // Track state for stripping <think>…</think> blocks from the stream
+        $think_state = ['in' => false];
+        $this->httpPostStreaming($url, $body, $headers, function (string $line) use (&$accumulated, $onChunk, &$think_state) {
             // OpenAI SSE format: "data: {json}\n"
             if (!str_starts_with($line, 'data: ')) return;
             $json_str = substr($line, 6);
@@ -246,16 +280,47 @@ class AIProvider
 
             $data = json_decode($json_str, true);
             $delta = $data['choices'][0]['delta']['content'] ?? '';
-            if ($delta !== '') {
-                $accumulated .= $delta;
-                $onChunk($delta);
+            if ($delta === '') return;
+
+            $accumulated .= $delta;
+
+            // Filter out <think>…</think> tokens from the live stream
+            $output = '';
+            $text = $delta;
+            while ($text !== '') {
+                if (!$think_state['in']) {
+                    $pos = strpos($text, '<think>');
+                    if ($pos === false) {
+                        $output .= $text;
+                        break;
+                    }
+                    $output .= substr($text, 0, $pos);
+                    $think_state['in'] = true;
+                    $text = substr($text, $pos + 7);
+                } else {
+                    $pos = strpos($text, '</think>');
+                    if ($pos === false) {
+                        break; // still inside thinking block, discard rest of delta
+                    }
+                    $think_state['in'] = false;
+                    $text = substr($text, $pos + 8);
+                    // Skip optional newline right after closing tag
+                    if ($text !== '' && $text[0] === "\n") {
+                        $text = substr($text, 1);
+                    }
+                }
+            }
+            if ($output !== '') {
+                $onChunk($output);
             }
         });
 
         if ($accumulated === '') {
             throw new RuntimeException('No content received from streaming response.');
         }
-        return $accumulated;
+        // Strip any thinking tags that weren't already filtered during streaming
+        // (e.g. tags split across chunk boundaries)
+        return self::stripThinkingTags($accumulated);
     }
 
     /**
@@ -329,6 +394,76 @@ class AIProvider
             return $this->httpPostCurl($url, $json, $headers);
         }
         return $this->httpPostStream($url, $json, $headers);
+    }
+
+    /**
+     * HTTP GET helper for model-listing endpoints.
+     */
+    private function httpGet(string $url, array $headers): string
+    {
+        if (function_exists('curl_init')) {
+            $ch = curl_init($url);
+            curl_setopt_array($ch, [
+                CURLOPT_HTTPGET => true,
+                CURLOPT_HTTPHEADER => $headers,
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_TIMEOUT => $this->timeout,
+                CURLOPT_CONNECTTIMEOUT => 15,
+                CURLOPT_FOLLOWLOCATION => true,
+                CURLOPT_MAXREDIRS => 3,
+            ]);
+
+            $response = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $error = curl_error($ch);
+            curl_close($ch);
+
+            if ($response === false) {
+                throw new RuntimeException('HTTP request failed: ' . $error);
+            }
+
+            if ($httpCode === 401 || $httpCode === 403) {
+                throw new RuntimeException('Authentication failed (HTTP ' . $httpCode . '). Check your API key.');
+            }
+
+            if ($httpCode >= 400) {
+                throw new RuntimeException('HTTP ' . $httpCode . ': ' . mb_substr($response, 0, 300));
+            }
+
+            return $response;
+        }
+
+        $headerStr = implode("\r\n", $headers);
+        $context = stream_context_create([
+            'http' => [
+                'method' => 'GET',
+                'header' => $headerStr,
+                'timeout' => $this->timeout,
+                'ignore_errors' => true,
+            ],
+        ]);
+
+        $response = @file_get_contents($url, false, $context);
+        if ($response === false) {
+            throw new RuntimeException('HTTP request failed (stream). Check URL and network.');
+        }
+
+        $status = 0;
+        $resp_headers = http_get_last_response_headers();
+        if (is_array($resp_headers) && isset($resp_headers[0])) {
+            preg_match('/\d{3}/', $resp_headers[0], $m);
+            $status = (int) ($m[0] ?? 0);
+        }
+
+        if ($status === 401 || $status === 403) {
+            throw new RuntimeException('Authentication failed (HTTP ' . $status . '). Check your API key.');
+        }
+
+        if ($status >= 400) {
+            throw new RuntimeException('HTTP ' . $status . ': ' . mb_substr($response, 0, 300));
+        }
+
+        return $response;
     }
 
     /**
@@ -634,14 +769,172 @@ class AIProvider
         // Some models return a URL instead
         $img_url = $response['data'][0]['url'] ?? null;
         if ($img_url !== null) {
-            $binary = @file_get_contents($img_url);
-            if ($binary === false) {
-                throw new RuntimeException('Failed to download generated image.');
-            }
-            return $binary;
+            return $this->downloadRemoteBinary($img_url);
         }
 
         $err = $response['error']['message'] ?? mb_substr($raw, 0, 300);
         throw new RuntimeException('Image generation failed: ' . $err);
+    }
+
+    /* ------------------------------------------------------------------
+     * Utilities
+     * ----------------------------------------------------------------*/
+
+    /**
+     * Remove <think>…</think> blocks from text (used by DeepSeek-R1 etc.).
+     * Also removes an optional trailing newline directly after the closing tag.
+     *
+     * @param string $text Input text.
+     * @return string Text with thinking blocks stripped.
+     */
+    private static function stripThinkingTags(string $text): string
+    {
+        return trim(preg_replace('/<think>[\s\S]*?<\/think>\n?/i', '', $text));
+    }
+
+    /**
+     * List models from an OpenAI-compatible /models endpoint.
+     *
+     * @return array<int, string>
+     */
+    private function listOpenAICompatibleModels(): array
+    {
+        $base_url = rtrim((string) ($this->key['base_url'] ?? ''), '/');
+        $url = $base_url . '/models';
+        $headers = ['Content-Type: application/json'];
+        $api_key = $this->key['api_key'] ?? '';
+        if ($api_key !== '') {
+            $headers[] = 'Authorization: Bearer ' . $api_key;
+        }
+
+        $raw = $this->httpGet($url, $headers);
+        $data = json_decode($raw, true);
+        if (!is_array($data)) {
+            throw new RuntimeException('Invalid JSON response from provider.');
+        }
+
+        $models = [];
+        foreach (($data['data'] ?? []) as $item) {
+            $id = trim((string) ($item['id'] ?? $item['name'] ?? ''));
+            if ($id !== '') {
+                $models[] = $id;
+            }
+        }
+
+        return $models;
+    }
+
+    /**
+     * List models from Anthropic's /v1/models endpoint.
+     *
+     * @return array<int, string>
+     */
+    private function listAnthropicModels(): array
+    {
+        $base_url = rtrim((string) ($this->key['base_url'] ?? ''), '/');
+        $url = $base_url . '/v1/models';
+        $headers = [
+            'Content-Type: application/json',
+            'x-api-key: ' . ($this->key['api_key'] ?? ''),
+            'anthropic-version: 2023-06-01',
+        ];
+
+        $raw = $this->httpGet($url, $headers);
+        $data = json_decode($raw, true);
+        if (!is_array($data)) {
+            throw new RuntimeException('Invalid JSON response from Anthropic.');
+        }
+
+        $models = [];
+        foreach (($data['data'] ?? []) as $item) {
+            $id = trim((string) ($item['id'] ?? $item['display_name'] ?? ''));
+            if ($id !== '') {
+                $models[] = $id;
+            }
+        }
+
+        return $models;
+    }
+
+    /**
+     * List models from Ollama's native /api/tags endpoint.
+     *
+     * @return array<int, string>
+     */
+    private function listOllamaModels(): array
+    {
+        $base_url = rtrim((string) ($this->key['base_url'] ?? ''), '/');
+        $base_url = preg_replace('#/v1$#', '', $base_url);
+        $url = $base_url . '/api/tags';
+
+        $raw = $this->httpGet($url, ['Content-Type: application/json']);
+        $data = json_decode($raw, true);
+        if (!is_array($data)) {
+            throw new RuntimeException('Invalid JSON response from Ollama.');
+        }
+
+        $models = [];
+        foreach (($data['models'] ?? []) as $item) {
+            $id = trim((string) ($item['model'] ?? $item['name'] ?? ''));
+            if ($id !== '') {
+                $models[] = $id;
+            }
+        }
+
+        return $models;
+    }
+
+    /**
+     * Download a remote binary asset from a public URL without following redirects.
+     */
+    private function downloadRemoteBinary(string $url): string
+    {
+        $policy = api_key_url_policy($url);
+        if (!$policy['ok'] || $policy['restricted']) {
+            throw new RuntimeException('Refusing to download an image from a non-public URL.');
+        }
+
+        if (function_exists('curl_init')) {
+            $ch = curl_init($url);
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_TIMEOUT => $this->timeout,
+                CURLOPT_CONNECTTIMEOUT => 15,
+                CURLOPT_FOLLOWLOCATION => false,
+                CURLOPT_MAXREDIRS => 0,
+            ]);
+
+            $response = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $error = curl_error($ch);
+            curl_close($ch);
+
+            if ($response === false) {
+                throw new RuntimeException('Failed to download generated image: ' . $error);
+            }
+
+            if ($httpCode >= 400) {
+                throw new RuntimeException('Failed to download generated image (HTTP ' . $httpCode . ').');
+            }
+
+            return $response;
+        }
+
+        $context = stream_context_create([
+            'http' => [
+                'method' => 'GET',
+                'timeout' => $this->timeout,
+                'ignore_errors' => true,
+                'follow_location' => 0,
+                'max_redirects' => 0,
+            ],
+        ]);
+
+        $response = @file_get_contents($url, false, $context);
+        if ($response === false) {
+            throw new RuntimeException('Failed to download generated image.');
+        }
+
+        return $response;
     }
 }
