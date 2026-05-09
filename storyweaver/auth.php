@@ -12,12 +12,12 @@ $action = $_GET['action'] ?? 'login';
 
 // ─── Setup guard: redirect to setup if no users exist ───
 if ($action !== 'setup' && !users_exists()) {
-    redirect(base_url() . '/auth.php?action=setup');
+    redirect(auth_url('setup'));
 }
 
 // ─── Setup page must be inaccessible once users.json exists ───
 if ($action === 'setup' && users_exists()) {
-    redirect(base_url() . '/index.php');
+    redirect(app_url('index'));
 }
 
 // ─── Route to the appropriate action ───
@@ -41,7 +41,7 @@ switch ($action) {
         handle_register();
         break;
     default:
-        redirect(base_url() . '/auth.php?action=login');
+        redirect(auth_url('login'));
 }
 
 /* ======================================================================
@@ -90,7 +90,7 @@ function handle_setup(): void
             $user = user_create($username, $email, $password, 'admin');
             auth_login($user['id']);
             flash('success', 'Welcome to StoryWeaver! Your admin account has been created.');
-            redirect(base_url() . '/index.php');
+            redirect(app_url('index'));
         }
     }
 
@@ -98,12 +98,12 @@ function handle_setup(): void
         ?>
         <div class="sw-auth-page">
             <div class="sw-auth-card">
-                <h1>🧶 StoryWeaver</h1>
+                <h1 class="sw-auth-brand"><img src="<?= h(base_url()) ?>/_assets/sw-logo.png" class="sw-auth-brand-icon" alt="" aria-hidden="true"> <span>StoryWeaver</span></h1>
                 <p class="sw-auth-subtitle">Set up your first admin account to get started.</p>
 
                 <?php render_errors($errors); ?>
 
-                <form method="POST" action="<?= h(base_url()) ?>/auth.php?action=setup">
+                <form method="POST" action="<?= h(auth_url('setup')) ?>">
                     <?= csrf_field() ?>
 
                     <div class="sw-form-group">
@@ -150,7 +150,7 @@ function handle_login(): void
 {
     // Already logged in? Go home.
     if (is_logged_in()) {
-        redirect(base_url() . '/index.php');
+        redirect(app_url('index'));
     }
 
     $errors = [];
@@ -168,7 +168,7 @@ function handle_login(): void
         } else {
             auth_login($user['id']);
             flash('success', 'Welcome back, ' . $user['username'] . '!');
-            redirect(base_url() . '/index.php');
+            redirect(app_url('index'));
         }
     }
 
@@ -176,13 +176,13 @@ function handle_login(): void
         ?>
         <div class="sw-auth-page">
             <div class="sw-auth-card">
-                <h1>🧶 StoryWeaver</h1>
+                <h1 class="sw-auth-brand"><img src="<?= h(base_url()) ?>/_assets/sw-logo.png" class="sw-auth-brand-icon" alt="" aria-hidden="true"> <span>StoryWeaver</span></h1>
                 <p class="sw-auth-subtitle">Log in to your account.</p>
 
                 <?php render_errors($errors); ?>
                 <?php render_flashes(); ?>
 
-                <form method="POST" action="<?= h(base_url()) ?>/auth.php?action=login">
+                <form method="POST" action="<?= h(auth_url('login')) ?>">
                     <?= csrf_field() ?>
 
                     <div class="sw-form-group">
@@ -202,9 +202,9 @@ function handle_login(): void
                 </form>
 
                 <div class="sw-auth-footer">
-                    <a href="<?= h(base_url()) ?>/auth.php?action=register">Create an account</a>
+                    <a href="<?= h(auth_url('register')) ?>">Create an account</a>
                     &nbsp;·&nbsp;
-                    <a href="<?= h(base_url()) ?>/auth.php?action=reset_request">Forgot password?</a>
+                    <a href="<?= h(auth_url('reset_request')) ?>">Forgot password?</a>
                 </div>
             </div>
         </div>
@@ -218,7 +218,7 @@ function handle_login(): void
 function handle_logout(): void
 {
     if (!is_post()) {
-        redirect(base_url() . '/index.php');
+        redirect(app_url('index'));
     }
 
     csrf_check();
@@ -226,7 +226,7 @@ function handle_logout(): void
     // Start a new session for the flash message
     sw_start_session();
     flash('info', 'You have been logged out.');
-    redirect(base_url() . '/auth.php?action=login');
+    redirect(auth_url('login'));
 }
 
 /**
@@ -274,8 +274,7 @@ function handle_reset_request(): void
                 json_write($mail_dir . '/' . $token . '.json', $token_data);
 
                 // Build the reset link
-                $reset_link = request_origin() . base_url()
-                            . '/auth.php?action=reset&token=' . urlencode($token);
+                $reset_link = request_origin() . auth_url('reset', ['token' => $token]);
 
                 // Attempt to send email
                 $subject = 'StoryWeaver — Password Reset';
@@ -310,7 +309,7 @@ function handle_reset_request(): void
                 <?php render_errors($errors); ?>
                 <?php render_flashes(); ?>
 
-                <form method="POST" action="<?= h(base_url()) ?>/auth.php?action=reset_request">
+                <form method="POST" action="<?= h(auth_url('reset_request')) ?>">
                     <?= csrf_field() ?>
 
                     <div class="sw-form-group">
@@ -325,7 +324,7 @@ function handle_reset_request(): void
                 </form>
 
                 <div class="sw-auth-footer">
-                    <a href="<?= h(base_url()) ?>/auth.php?action=login">← Back to login</a>
+                    <a href="<?= h(auth_url('login')) ?>">← Back to login</a>
                 </div>
             </div>
         </div>
@@ -374,7 +373,7 @@ function handle_reset(): void
                     <h1>Invalid or Expired Link</h1>
                     <p>This password reset link is invalid or has expired.</p>
                     <div class="sw-auth-footer">
-                        <a href="<?= h(base_url()) ?>/auth.php?action=reset_request">Request a new reset link</a>
+                        <a href="<?= h(auth_url('reset_request')) ?>">Request a new reset link</a>
                     </div>
                 </div>
             </div>
@@ -409,7 +408,7 @@ function handle_reset(): void
             @unlink($token_file);
 
             flash('success', 'Your password has been reset. Please log in.');
-            redirect(base_url() . '/auth.php?action=login');
+            redirect(auth_url('login'));
         }
     }
 
@@ -422,7 +421,7 @@ function handle_reset(): void
 
                 <?php render_errors($errors); ?>
 
-                <form method="POST" action="<?= h(base_url()) ?>/auth.php?action=reset&token=<?= h(urlencode($token_str)) ?>">
+                <form method="POST" action="<?= h(auth_url('reset', ['token' => $token_str])) ?>">
                     <?= csrf_field() ?>
 
                     <div class="sw-form-group">
@@ -457,7 +456,7 @@ function handle_register(): void
 {
     // Already logged in? Go home.
     if (is_logged_in()) {
-        redirect(base_url() . '/index.php');
+        redirect(app_url('index'));
     }
 
     $errors = [];
@@ -498,7 +497,7 @@ function handle_register(): void
             $user = user_create($username, $email, $password, 'contributor');
             auth_login($user['id']);
             flash('success', 'Welcome to StoryWeaver, ' . $user['username'] . '! Your account has been created.');
-            redirect(base_url() . '/index.php');
+            redirect(app_url('index'));
         }
     }
 
@@ -506,12 +505,12 @@ function handle_register(): void
         ?>
         <div class="sw-auth-page">
             <div class="sw-auth-card">
-                <h1>🧶 StoryWeaver</h1>
+                <h1 class="sw-auth-brand"><img src="<?= h(base_url()) ?>/_assets/sw-logo.png" class="sw-auth-brand-icon" alt="" aria-hidden="true"> <span>StoryWeaver</span></h1>
                 <p class="sw-auth-subtitle">Create a new account.</p>
 
                 <?php render_errors($errors); ?>
 
-                <form method="POST" action="<?= h(base_url()) ?>/auth.php?action=register">
+                <form method="POST" action="<?= h(auth_url('register')) ?>">
                     <?= csrf_field() ?>
 
                     <div class="sw-form-group">
@@ -544,7 +543,7 @@ function handle_register(): void
                 </form>
 
                 <div class="sw-auth-footer">
-                    Already have an account? <a href="<?= h(base_url()) ?>/auth.php?action=login">Log in</a>
+                    Already have an account? <a href="<?= h(auth_url('login')) ?>">Log in</a>
                 </div>
             </div>
         </div>

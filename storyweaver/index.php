@@ -11,7 +11,7 @@ require_once __DIR__ . '/_lib/api_keys.php';
 
 // First-run: redirect to setup if no users exist
 if (!users_exists()) {
-    redirect(base_url() . '/auth.php?action=setup');
+    redirect(auth_url('setup'));
 }
 
 $user = current_user();
@@ -142,7 +142,7 @@ if (is_dir($stories_dir)) {
         <?php else: ?>
             <div class="sw-story-list">
                 <?php foreach ($stories as $story): ?>
-                    <a href="<?= h($base) ?>/node.php?story=<?= h($story['story_id']) ?>&id=<?= h($story['root_node']) ?>"
+                    <a href="<?= h(node_url($story['story_id'], $story['root_node'])) ?>"
                        class="sw-story-item" style="text-decoration:none; color:inherit;">
                         <div>
                             <div class="sw-story-item-title"><?= h($story['title']) ?></div>
@@ -166,7 +166,7 @@ if (is_dir($stories_dir)) {
     <div id="sw-new-story-modal" class="sw-modal-backdrop">
         <div class="sw-modal">
             <h2>Begin New Story</h2>
-            <form method="POST" action="<?= h($base) ?>/play.php">
+            <form method="POST" action="<?= h(app_url('play')) ?>">
                 <input type="hidden" name="action" value="new_story">
                 <input type="hidden" name="_csrf_token" value="<?= h(csrf_token()) ?>">
                 <input type="hidden" name="use_ai" id="sw-use-ai" value="1">

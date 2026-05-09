@@ -79,7 +79,7 @@ function require_role(string $minimum_role = 'contributor'): array
 
     if ($user === null) {
         flash('error', 'Please log in to continue.');
-        redirect(base_url() . '/auth.php?action=login');
+        redirect(auth_url('login'));
     }
 
     if (role_level($user['role']) < role_level($minimum_role)) {
@@ -98,7 +98,7 @@ function require_role(string $minimum_role = 'contributor'): array
            . '<div class="sw-container sw-text-center sw-mt-3">'
            . '<h1>403 — Forbidden</h1>'
            . '<p>You do not have permission to access this page.</p>'
-           . '<a href="' . h(base_url()) . '/index.php">← Back to home</a>'
+           . '<a href="' . h(app_url('index')) . '">← Back to home</a>'
            . '</div></body></html>';
         exit;
     }

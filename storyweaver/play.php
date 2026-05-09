@@ -15,7 +15,7 @@ require_once __DIR__ . '/_lib/context.php';
 
 // Must be POST
 if (!is_post()) {
-    redirect(base_url() . '/index.php');
+    redirect(app_url('index'));
 }
 
 csrf_check();
@@ -51,7 +51,7 @@ function handle_new_story(): void
 
     if ($title === '') {
         flash('error', 'A story title is required.');
-        redirect(base_url() . '/index.php');
+        redirect(app_url('index'));
     }
 
     if (strlen($title) > 200) {
@@ -71,7 +71,7 @@ function handle_new_story(): void
                 $key_record = null;
             } elseif (($key_error = api_key_access_error($key_record, $user)) !== null) {
                 flash('error', $key_error);
-                redirect(base_url() . '/index.php');
+                redirect(app_url('index'));
             }
         } else {
             $key_record = api_key_select_for_user($user_id);
@@ -114,8 +114,7 @@ function handle_new_story(): void
                     }
 
                     flash('success', 'Story created with AI! Review and edit as you wish.');
-                    redirect(base_url() . '/node.php?story=' . urlencode($result['story_id'])
-                           . '&id=' . urlencode($result['node_id']));
+                    redirect(node_url($result['story_id'], $result['node_id']));
                 }
             } catch (RuntimeException $e) {
                 // AI failed — fall through to manual creation
@@ -135,12 +134,10 @@ function handle_new_story(): void
     // Guests can't edit, so redirect to node view; logged-in users go to editor
     if ($user) {
         flash('success', 'Story created! Write your opening below.');
-        redirect(base_url() . '/edit.php?story=' . urlencode($result['story_id'])
-               . '&id=' . urlencode($result['node_id']));
+        redirect(edit_url($result['story_id'], $result['node_id']));
     } else {
         flash('success', 'Story created! Log in to edit, or continue with AI.');
-        redirect(base_url() . '/node.php?story=' . urlencode($result['story_id'])
-               . '&id=' . urlencode($result['node_id']));
+        redirect(node_url($result['story_id'], $result['node_id']));
     }
 }
 
@@ -166,17 +163,16 @@ function handle_continue_choice(): void
 
     if ($story_id === '' || $parent_node_id === '') {
         flash('error', 'Missing story or parent page information.');
-        redirect(base_url() . '/index.php');
+        redirect(app_url('index'));
     }
 
     if (!validate_id($story_id, 'story_') || !validate_id($parent_node_id, 'node_')) {
-        flash('error', 'Invalid story or page ID.');        redirect(base_url() . '/index.php');
+        flash('error', 'Invalid story or page ID.');        redirect(app_url('index'));
     }
 
     if ($chosen === '') {
         flash('error', 'Please select or type a choice to continue.');
-        redirect(base_url() . '/node.php?story=' . urlencode($story_id)
-               . '&id=' . urlencode($parent_node_id));
+        redirect(node_url($story_id, $parent_node_id));
     }
 
     // Verify parent node exists, including quarantined stories the author may still access
@@ -184,7 +180,7 @@ function handle_continue_choice(): void
     $parent = node_read_for_user($story_id, $parent_node_id, $user);
     if ($parent === null) {
         flash('error', 'Parent page not found.');
-        redirect(base_url() . '/index.php');
+        redirect(app_url('index'));
     }
     $check_q = ($parent['location'] ?? 'stories') === 'quarantine';
 
@@ -235,8 +231,7 @@ function handle_continue_choice(): void
                 node_link_choice($story_id, $parent_node_id, $chosen, $child_node_id);
 
                 flash('success', 'The story continues! Edit if you like.');
-                redirect(base_url() . '/node.php?story=' . urlencode($story_id)
-                       . '&id=' . urlencode($child_node_id));
+                redirect(node_url($story_id, $child_node_id));
             }
         } catch (RuntimeException $e) {
             // AI failed — fall through to manual
@@ -264,11 +259,9 @@ function handle_continue_choice(): void
     // Guests can't edit, redirect to node view; logged-in users go to editor
     if ($user) {
         flash('success', 'Continue the story from here!');
-        redirect(base_url() . '/edit.php?story=' . urlencode($story_id)
-               . '&id=' . urlencode($child_node_id));
+        redirect(edit_url($story_id, $child_node_id));
     } else {
         flash('success', 'Page created! Log in to edit, or continue with AI.');
-        redirect(base_url() . '/node.php?story=' . urlencode($story_id)
-               . '&id=' . urlencode($child_node_id));
+        redirect(node_url($story_id, $child_node_id));
     }
 }

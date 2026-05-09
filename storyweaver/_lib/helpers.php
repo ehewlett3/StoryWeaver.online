@@ -260,6 +260,66 @@ function base_url(): string
     return $base;
 }
 
+/**
+ * Build an application URL using extensionless public routes.
+ *
+ * @param string $route Route name without extension, e.g. "help" or "node".
+ * @param array  $query Optional query parameters.
+ * @return string URL path relative to the current installation root.
+ */
+function app_url(string $route = 'index', array $query = []): string
+{
+    $base = rtrim(base_url(), '/');
+    $route = trim($route, '/');
+
+    if ($route === '' || $route === 'index') {
+        $url = $base === '' ? '/' : $base . '/';
+    } else {
+        $url = ($base === '' ? '' : $base) . '/' . $route;
+    }
+
+    if (!empty($query)) {
+        $url .= '?' . http_build_query($query, '', '&', PHP_QUERY_RFC3986);
+    }
+
+    return $url;
+}
+
+/**
+ * Build a URL for the auth controller.
+ */
+function auth_url(string $action, array $query = []): string
+{
+    return app_url('auth', array_merge(['action' => $action], $query));
+}
+
+/**
+ * Build a URL for the API controller.
+ */
+function api_url(string $action = '', array $query = []): string
+{
+    if ($action !== '') {
+        $query = array_merge(['action' => $action], $query);
+    }
+    return app_url('api', $query);
+}
+
+/**
+ * Build a URL for viewing a story node.
+ */
+function node_url(string $story_id, string $node_id): string
+{
+    return app_url('node', ['story' => $story_id, 'id' => $node_id]);
+}
+
+/**
+ * Build a URL for editing a story node.
+ */
+function edit_url(string $story_id, string $node_id): string
+{
+    return app_url('edit', ['story' => $story_id, 'id' => $node_id]);
+}
+
 /* ------------------------------------------------------------------
  * CSRF Protection
  * ----------------------------------------------------------------*/
@@ -364,7 +424,7 @@ function mail_from_address(): string
 function render_logout_button(string $base_url, string $label = 'Log out'): void
 {
     ?>
-    <form method="POST" action="<?= h($base_url) ?>/auth.php?action=logout" style="display:inline; margin:0;">
+    <form method="POST" action="<?= h(auth_url('logout')) ?>" style="display:inline; margin:0;">
         <?= csrf_field() ?>
         <button type="submit" style="background:none; border:0; padding:0; color:inherit; font:inherit; cursor:pointer;">
             <?= h($label) ?>
@@ -408,22 +468,21 @@ function render_brand_favicon_links(): void
  */
 function render_main_nav(?array $user, string $active = ''): void
 {
-    $base = base_url();
     $needs_setup = function_exists('users_exists') && !users_exists();
     ?>
     <nav class="sw-nav">
-        <a href="<?= h($base) ?>/index.php" class="sw-nav-brand" title="StoryWeaver home" aria-label="StoryWeaver home">
-            <img src="<?= h($base) ?>/_assets/sw-logo.png" class="sw-nav-brand-icon" alt="" aria-hidden="true">
+        <a href="<?= h(app_url('index')) ?>" class="sw-nav-brand" title="StoryWeaver home" aria-label="StoryWeaver home">
+            <img src="<?= h(base_url()) ?>/_assets/sw-logo.png" class="sw-nav-brand-icon" alt="" aria-hidden="true">
             <span class="sw-nav-brand-text">StoryWeaver</span>
         </a>
         <ul class="sw-nav-links">
-            <?php render_main_nav_link($base . '/index.php', '📚', 'Stories', $active === 'stories'); ?>
-            <?php render_main_nav_link($base . '/help.php', '❓', 'Help', $active === 'help'); ?>
+            <?php render_main_nav_link(app_url('index'), '📚', 'Stories', $active === 'stories'); ?>
+            <?php render_main_nav_link(app_url('help'), '❓', 'Help', $active === 'help'); ?>
 
             <?php if ($user !== null): ?>
-                <?php render_main_nav_link($base . '/settings.php', '⚙️', 'Settings', $active === 'settings'); ?>
+                <?php render_main_nav_link(app_url('settings'), '⚙️', 'Settings', $active === 'settings'); ?>
                 <?php if (role_level((string) ($user['role'] ?? 'viewer')) >= role_level('editor')): ?>
-                    <?php render_main_nav_link($base . '/admin.php', '🛡️', 'Admin', $active === 'admin'); ?>
+                    <?php render_main_nav_link(app_url('admin'), '🛡️', 'Admin', $active === 'admin'); ?>
                 <?php endif; ?>
                 <li>
                     <span class="sw-nav-user" title="<?= h((string) ($user['username'] ?? 'User')) ?>" aria-label="<?= h((string) ($user['username'] ?? 'User')) ?>">
@@ -432,7 +491,7 @@ function render_main_nav(?array $user, string $active = ''): void
                     </span>
                 </li>
                 <li>
-                    <form method="POST" action="<?= h($base) ?>/auth.php?action=logout" class="sw-nav-form">
+                    <form method="POST" action="<?= h(auth_url('logout')) ?>" class="sw-nav-form">
                         <?= csrf_field() ?>
                         <button type="submit" class="sw-nav-link sw-nav-button" title="Log out" aria-label="Log out">
                             <span class="sw-nav-icon" aria-hidden="true">↪</span>
@@ -441,10 +500,10 @@ function render_main_nav(?array $user, string $active = ''): void
                     </form>
                 </li>
             <?php elseif ($needs_setup): ?>
-                <?php render_main_nav_link($base . '/auth.php?action=setup', '🚀', 'Setup', $active === 'setup'); ?>
+                <?php render_main_nav_link(auth_url('setup'), '🚀', 'Setup', $active === 'setup'); ?>
             <?php else: ?>
-                <?php render_main_nav_link($base . '/auth.php?action=login', '🔐', 'Log in', $active === 'login'); ?>
-                <?php render_main_nav_link($base . '/auth.php?action=register', '✨', 'Register', $active === 'register'); ?>
+                <?php render_main_nav_link(auth_url('login'), '🔐', 'Log in', $active === 'login'); ?>
+                <?php render_main_nav_link(auth_url('register'), '✨', 'Register', $active === 'register'); ?>
             <?php endif; ?>
         </ul>
     </nav>

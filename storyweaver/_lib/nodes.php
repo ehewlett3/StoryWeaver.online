@@ -690,7 +690,7 @@ function node_generate_html(array $params): string
 
     // Find root node for breadcrumb link
     $root_id = story_find_root($story_id);
-    $root_link = $root_id ? ($root_id . '.html') : '#';
+    $root_link = $root_id ?: '#';
 
     // Build paragraphs HTML
     $para_html = '';
@@ -707,7 +707,7 @@ function node_generate_html(array $params): string
     foreach ($choices as $c) {
         $text = h($c['text']);
         if ($c['node'] !== null) {
-            $choices_list_html .= '      <li><a href="' . h($c['node']) . '">' . $text . "</a></li>\n";
+            $choices_list_html .= '      <li><a href="' . h(basename((string) $c['node'], '.html')) . '">' . $text . "</a></li>\n";
         } else {
             $choices_list_html .= '      <li><a href="#" class="sw-choice-pending" data-choice-id="'
                                 . (int)$c['id'] . '">' . $text . "</a></li>\n";
@@ -717,7 +717,7 @@ function node_generate_html(array $params): string
     // Back link
     $back_html = '';
     if ($parent_id !== '') {
-        $back_html = '<a class="sw-back" href="' . h($parent_id) . '.html">← Back</a>';
+        $back_html = '<a class="sw-back" href="' . h($parent_id) . '">← Back</a>';
     }
 
     // Assemble the full HTML document
@@ -742,7 +742,7 @@ function node_generate_html(array $params): string
 <body data-sw-node="true">
 
   <nav class="sw-breadcrumb">
-    <a href="../../index.php">All Stories</a> ›
+    <a href="../../">All Stories</a> ›
     <a href="{$root_link}">{$title}</a>
   </nav>
 
@@ -756,7 +756,7 @@ function node_generate_html(array $params): string
     <h2>What do you do?</h2>
     <ul>
 {$choices_list_html}    </ul>
-    <form class="sw-custom-choice" action="../../play.php" method="POST">
+    <form class="sw-custom-choice" action="../../play" method="POST">
       <input type="hidden" name="story_id" value="{$story_id}">
       <input type="hidden" name="parent_node_id" value="{$node_id}">
       <input type="hidden" name="_csrf_token" value="">
@@ -768,7 +768,7 @@ function node_generate_html(array $params): string
   <footer class="sw-node-footer">
     {$back_html}
     <span class="sw-flag-concern">
-      <a href="../../api.php?action=flag_concern&node={$node_id}">⚑ Flag for review</a>
+      <a href="../../api?action=flag_concern&node={$node_id}">⚑ Flag for review</a>
     </span>
   </footer>
 

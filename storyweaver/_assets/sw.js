@@ -264,7 +264,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         // Use fetch + ReadableStream for SSE (more control than EventSource for POST)
-        fetch(apiBase + '/api.php?action=' + (options.action || 'stream_generate_node'), {
+        fetch(apiBase + '/api?action=' + (options.action || 'stream_generate_node'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
@@ -483,7 +483,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     optionEl.style.pointerEvents = 'none';
                 });
 
-                fetch(apiBase + '/api.php?action=apply_regenerated_node', {
+                fetch(apiBase + '/api?action=apply_regenerated_node', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -604,7 +604,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 onFallback: function () {
                     var form = document.createElement('form');
                     form.method = 'POST';
-                    form.action = 'play.php';
+                    form.action = 'play';
                     form.innerHTML =
                         '<input type="hidden" name="story_id" value="' + storyId + '">' +
                         '<input type="hidden" name="parent_node_id" value="' + nodeId + '">' +
@@ -648,7 +648,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     showStoryCompareModal(data);
                 },
                 onFallback: function () {
-                    fetch(apiBase + '/api.php?action=regenerate_node', {
+                    fetch(apiBase + '/api?action=regenerate_node', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -689,7 +689,7 @@ document.addEventListener('DOMContentLoaded', function () {
             genImageBtn.disabled = true;
             genImageBtn.textContent = '🖼️ Generating…';
 
-            fetch('api.php?action=generate_image', {
+            fetch('api?action=generate_image', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -734,7 +734,7 @@ document.addEventListener('DOMContentLoaded', function () {
             if (!confirm('Delete this image?')) return;
             var imageUrl = btn.getAttribute('data-image-url');
             btn.disabled = true;
-            fetch('api.php?action=delete_image', {
+            fetch('api?action=delete_image', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -798,7 +798,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 label.style.pointerEvents = 'none';
             }
 
-            fetch('api.php?action=upload_image', {
+            fetch('api?action=upload_image', {
                 method: 'POST',
                 headers: { 'Accept': 'application/json' },
                 body: formData
@@ -826,7 +826,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         delBtn.addEventListener('click', function () {
                             if (!confirm('Delete this image?')) return;
                             delBtn.disabled = true;
-                            fetch('api.php?action=delete_image', {
+                            fetch('api?action=delete_image', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ image_url: data.image_url, _csrf_token: csrfValue })
@@ -879,7 +879,7 @@ document.addEventListener('DOMContentLoaded', function () {
             regenImageBtn.disabled = true;
             regenImageBtn.textContent = '🖼️ Generating new image…';
 
-            fetch('api.php?action=generate_image', {
+            fetch('api?action=generate_image', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -940,7 +940,7 @@ document.addEventListener('DOMContentLoaded', function () {
             opt.addEventListener('click', function () {
                 var deleteUrl = opt.getAttribute('data-delete');
                 // Delete the rejected image
-                fetch('api.php?action=delete_image', {
+                fetch('api?action=delete_image', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -1252,7 +1252,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     };
                 }
 
-                fetch(apiBase + '/api.php?action=list_api_models', {
+                fetch(apiBase + '/api?action=list_api_models', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
@@ -1279,7 +1279,7 @@ document.addEventListener('DOMContentLoaded', function () {
             setKeyFormStatus(addKeyForm.dataset.mode === 'edit' ? 'Saving changes…' : 'Saving…', false);
 
             var action = addKeyForm.dataset.mode === 'edit' ? 'update_api_key' : 'save_api_key';
-            fetch(apiBase + '/api.php?action=' + action, {
+            fetch(apiBase + '/api?action=' + action, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(buildKeyPayload())
@@ -1327,7 +1327,7 @@ document.addEventListener('DOMContentLoaded', function () {
             btn.disabled = true;
             btn.textContent = '…';
 
-            fetch(apiBase + '/api.php?action=' + action, {
+            fetch(apiBase + '/api?action=' + action, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ key_id: keyId, _csrf_token: csrfValue })
@@ -1365,7 +1365,7 @@ document.addEventListener('DOMContentLoaded', function () {
             var storyId = flagConcernBtn.getAttribute('data-story-id');
             var nodeId = flagConcernBtn.getAttribute('data-node-id');
 
-            fetch('api.php?action=flag_concern', {
+            fetch('api?action=flag_concern', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -1403,7 +1403,7 @@ document.addEventListener('DOMContentLoaded', function () {
             var storyId = flagReviewBtn.getAttribute('data-story-id');
             var nodeId = flagReviewBtn.getAttribute('data-node-id');
 
-            fetch('api.php?action=flag_review', {
+            fetch('api?action=flag_review', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -1465,7 +1465,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
             btn.disabled = true;
 
-            fetch('api.php?action=' + action, {
+            fetch('api?action=' + action, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
@@ -1496,7 +1496,7 @@ document.addEventListener('DOMContentLoaded', function () {
             var userId = select.getAttribute('data-user-id');
             var newRole = select.value;
 
-            fetch('api.php?action=change_role', {
+            fetch('api?action=change_role', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -1763,7 +1763,7 @@ document.addEventListener('DOMContentLoaded', function () {
             }
 
             try {
-                const resp = await fetch(apiBase + '/api.php?action=update_story_scenario', {
+                const resp = await fetch(apiBase + '/api?action=update_story_scenario', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -1829,7 +1829,7 @@ document.addEventListener('DOMContentLoaded', function () {
             storyThemeBtn.disabled = true;
             storyThemeBtn.textContent = 'Saving…';
             try {
-                const resp = await fetch(apiBase + '/api.php?action=set_story_theme', {
+                const resp = await fetch(apiBase + '/api?action=set_story_theme', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -1879,7 +1879,7 @@ document.addEventListener('DOMContentLoaded', function () {
         btn.disabled = true;
         btn.textContent = '🔍 Loading\u2026';
 
-        fetch('api.php?action=preview_prompt', {
+        fetch('api?action=preview_prompt', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

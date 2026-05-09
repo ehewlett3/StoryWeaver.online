@@ -19,21 +19,21 @@ $user     = current_user();
 // Must be logged in to edit
 if ($user === null) {
     flash('error', 'Please log in to edit story pages.');
-    redirect($base . '/auth.php?action=login');
+    redirect(auth_url('login'));
 }
 
 // Validate inputs
 if ($story_id === '' || $node_id === ''
     || !validate_id($story_id, 'story_') || !validate_id($node_id, 'node_')) {
     flash('error', 'Invalid story or page ID.');
-    redirect($base . '/index.php');
+    redirect(app_url('index'));
 }
 
 // Read the node, including quarantined stories the author may still access
 $node = node_read_for_user($story_id, $node_id, $user);
 if ($node === null) {
     flash('error', 'Page not found.');
-    redirect($base . '/index.php');
+    redirect(app_url('index'));
 }
 
 // Permission check: author can edit own, editor+ can edit any
@@ -42,11 +42,11 @@ $is_editor = (role_level($user['role']) >= role_level('editor'));
 
 if (!$is_author && !$is_editor) {
     flash('error', 'You do not have permission to edit this page.');
-    redirect($base . '/node.php?story=' . urlencode($story_id) . '&id=' . urlencode($node_id));
+    redirect(node_url($story_id, $node_id));
 }
 
 $title = $node['title'] ?: 'Edit Node';
-$cancel_url = $base . '/node.php?story=' . urlencode($story_id) . '&id=' . urlencode($node_id);
+$cancel_url = node_url($story_id, $node_id);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -75,8 +75,8 @@ $cancel_url = $base . '/node.php?story=' . urlencode($story_id) . '&id=' . urlen
         ?>
 
         <nav class="sw-breadcrumb">
-            <a href="<?= h($base) ?>/index.php">All Stories</a> ›
-            <a href="<?= h($base) ?>/node.php?story=<?= h($story_id) ?>&id=<?= h($node_id) ?>"><?= h($title) ?></a> ›
+            <a href="<?= h(app_url('index')) ?>">All Stories</a> ›
+            <a href="<?= h(node_url($story_id, $node_id)) ?>"><?= h($title) ?></a> ›
             <span>Editing</span>
         </nav>
 
@@ -90,7 +90,7 @@ $cancel_url = $base . '/node.php?story=' . urlencode($story_id) . '&id=' . urlen
              data-story-id="<?= h($story_id) ?>"
              data-node-id="<?= h($node_id) ?>"
              data-csrf-token="<?= h(csrf_token()) ?>"
-             data-api-url="<?= h($base) ?>/api.php"
+             data-api-url="<?= h(app_url('api')) ?>"
              data-cancel-url="<?= h($cancel_url) ?>">
 
             <!-- Toolbar -->

@@ -399,7 +399,7 @@ function handle_generate_node(): void
     json_success([
         'story_id' => $story_id,
         'node_id'  => $node_id,
-        'url'      => $base . '/node.php?story=' . urlencode($story_id) . '&id=' . urlencode($node_id),
+        'url'      => node_url($story_id, $node_id),
         'ending'   => $parsed['ending'] ?? false,
     ]);
 }
@@ -884,7 +884,7 @@ function handle_apply_regenerated_node(): void
     json_success([
         'story_id' => $story_id,
         'node_id'  => $node_id,
-        'url'      => $base . '/node.php?story=' . urlencode($story_id) . '&id=' . urlencode($node_id),
+        'url'      => node_url($story_id, $node_id),
         'ending'   => !empty($input['ending']),
     ]);
 }
@@ -1106,7 +1106,7 @@ function handle_stream_generate_node(): void
         'ok'         => true,
         'story_id'   => $story_id,
         'node_id'    => $node_id,
-        'url'        => $base . '/node.php?story=' . urlencode($story_id) . '&id=' . urlencode($node_id),
+        'url'        => node_url($story_id, $node_id),
         'ending'     => $parsed['ending'] ?? false,
         'paragraphs' => $paragraphs,
         'choices'    => $choices,
@@ -1941,7 +1941,7 @@ function handle_delete_node(): void
 
     json_success([
         'message' => 'Page permanently deleted.',
-        'redirect' => base_url() . '/index.php',
+        'redirect' => app_url('index'),
     ]);
 }
 
@@ -2077,7 +2077,7 @@ function handle_save_theme_css(): void
     $user = current_user();
     if (!$user || $user['role'] !== 'admin') {
         flash('error', 'Admin access required.');
-        redirect(base_url() . '/admin.php?tab=themes');
+        redirect(app_url('admin', ['tab' => 'themes']));
     }
 
     $theme_file = basename(trim($_POST['theme_file'] ?? ''));
@@ -2085,18 +2085,18 @@ function handle_save_theme_css(): void
 
     if ($theme_file === '' || !preg_match('/^[a-zA-Z0-9_-]+\.css$/', $theme_file)) {
         flash('error', 'Invalid theme filename.');
-        redirect(base_url() . '/admin.php?tab=themes');
+        redirect(app_url('admin', ['tab' => 'themes']));
     }
 
     $path = sw_root() . '/_themes/' . $theme_file;
     if (!file_exists($path)) {
         flash('error', 'Theme file not found.');
-        redirect(base_url() . '/admin.php?tab=themes');
+        redirect(app_url('admin', ['tab' => 'themes']));
     }
 
     atomic_write($path, $css);
     flash('success', 'Theme CSS saved.');
-    redirect(base_url() . '/admin.php?tab=themes');
+    redirect(app_url('admin', ['tab' => 'themes']));
 }
 
 /**

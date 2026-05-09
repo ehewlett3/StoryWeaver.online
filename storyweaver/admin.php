@@ -16,7 +16,7 @@ require_once __DIR__ . '/_lib/nodes.php';
 $user = current_user();
 if (!$user || !in_array($user['role'], ['editor', 'admin'])) {
     flash('error', 'You do not have permission to access the admin dashboard.');
-    redirect(base_url() . '/index.php');
+    redirect(app_url('index'));
 }
 
 $base = base_url();
@@ -128,7 +128,7 @@ function admin_story_title(array &$story_titles, string $story_id): string
                     <div class="sw-admin-item">
                         <div class="sw-admin-item-info">
                             <strong>
-                                <a href="<?= h($base) ?>/node.php?story=<?= h($concern['story_id']) ?>&id=<?= h($concern['node_id']) ?>">
+                                <a href="<?= h(node_url($concern['story_id'], $concern['node_id'])) ?>">
                                     <?= h(admin_story_title($story_titles, $concern['story_id'])) ?>
                                 </a>
                             </strong>
@@ -171,7 +171,7 @@ function admin_story_title(array &$story_titles, string $story_id): string
                     <div class="sw-admin-item">
                         <div class="sw-admin-item-info">
                             <strong>
-                                <a href="<?= h($base) ?>/node.php?story=<?= h($entry['story_id']) ?>&id=<?= h($entry['node_id']) ?>">
+                                <a href="<?= h(node_url($entry['story_id'], $entry['node_id'])) ?>">
                                     <?= h(admin_story_title($story_titles, $entry['story_id'])) ?>
                                 </a>
                             </strong>
@@ -304,12 +304,12 @@ function admin_story_title(array &$story_titles, string $story_id): string
             <!-- CSS Editor -->
             <div class="sw-form-group">
                 <h3>Editing: <?= h($edit_theme) ?></h3>
-                <form method="POST" action="<?= h($base) ?>/api.php?action=save_theme_css">
+                <form method="POST" action="<?= h(api_url('save_theme_css')) ?>">
                     <input type="hidden" name="_csrf_token" value="<?= h(csrf_token()) ?>">
                     <input type="hidden" name="theme_file" value="<?= h($edit_theme) ?>">
                     <textarea name="css" class="sw-input sw-theme-editor" rows="25"><?= h($edit_css) ?></textarea>
                     <div class="sw-modal-actions" style="margin-top:0.75rem">
-                        <a href="<?= h($base) ?>/admin.php?tab=themes" class="sw-btn sw-btn-secondary">Cancel</a>
+                        <a href="<?= h(app_url('admin', ['tab' => 'themes'])) ?>" class="sw-btn sw-btn-secondary">Cancel</a>
                         <button type="submit" class="sw-btn sw-btn-primary">💾 Save CSS</button>
                     </div>
                 </form>
@@ -326,11 +326,11 @@ function admin_story_title(array &$story_titles, string $story_id): string
                             <?php endif; ?>
                         </div>
                         <div class="sw-admin-item-actions">
-                            <a href="<?= h($base) ?>/admin.php?tab=themes&edit=<?= h($theme['file']) ?>"
+                            <a href="<?= h(app_url('admin', ['tab' => 'themes', 'edit' => $theme['file']])) ?>"
                                class="sw-btn sw-btn-sm sw-btn-secondary">
                                 ✏️ Edit CSS
                             </a>
-                            <a href="<?= h($base) ?>/index.php?preview_theme=<?= h($theme['file']) ?>"
+                            <a href="<?= h(app_url('index', ['preview_theme' => $theme['file']])) ?>"
                                class="sw-btn sw-btn-sm sw-btn-secondary" target="_blank">
                                 👁️ Preview
                             </a>

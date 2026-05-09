@@ -72,7 +72,7 @@ php -S localhost:8080
 
 Then visit `http://localhost:8080/storyweaver/` in your browser.
 
-> **Note:** The PHP built-in server does not process `.htaccess` rules. Private directories (`_data/`, `_lib/`) will be accessible via URL in this mode. Use Apache for production.
+> **Note:** The PHP built-in server does not process `.htaccess` rules. Private directories (`_data/`, `_lib/`) will be accessible via URL in this mode, and extensionless routes like `/help` or `/settings` will not work there. Use Apache for production and for testing the app's clean URLs.
 
 ### First Run
 

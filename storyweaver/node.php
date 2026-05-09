@@ -139,11 +139,11 @@ if ($user && $is_root_node) {
         <?php if ($can_edit || $can_flag): ?>
         <div class="sw-node-toolbar">
             <?php if ($can_edit): ?>
-                <a href="<?= h($base) ?>/edit.php?story=<?= h($story_id) ?>&id=<?= h($node_id) ?>"
+                <a href="<?= h(edit_url($story_id, $node_id)) ?>"
                    class="sw-btn sw-btn-sm sw-btn-secondary">✏️ Edit</a>
             <?php endif; ?>
             <?php if ($can_flag): ?>
-                <a href="<?= h($base) ?>/api.php?action=flag_concern&node=<?= h($node_id) ?>"
+                <a href="<?= h(api_url('flag_concern', ['node' => $node_id])) ?>"
                    class="sw-btn sw-btn-sm sw-btn-secondary">⚑ Flag</a>
             <?php endif; ?>
         </div>
@@ -151,11 +151,11 @@ if ($user && $is_root_node) {
 
         <!-- Breadcrumb -->
         <nav class="sw-breadcrumb">
-            <a href="<?= h($base) ?>/index.php">All Stories</a> ›
+            <a href="<?= h(app_url('index')) ?>">All Stories</a> ›
             <?php
             $root_id = story_find_root($story_id);
             if ($root_id && $root_id !== $node_id): ?>
-                <a href="<?= h($base) ?>/node.php?story=<?= h($story_id) ?>&id=<?= h($root_id) ?>"><?= h($node['title']) ?></a>
+                <a href="<?= h(node_url($story_id, $root_id)) ?>"><?= h($node['title']) ?></a>
             <?php else: ?>
                 <span><?= h($node['title']) ?></span>
             <?php endif; ?>
@@ -222,7 +222,7 @@ if ($user && $is_root_node) {
             <?php if (empty($node['paragraphs'])): ?>
                 <p class="sw-para sw-text-muted"><em>This page has no content yet.
                 <?php if ($can_edit): ?>
-                    <a href="<?= h($base) ?>/edit.php?story=<?= h($story_id) ?>&id=<?= h($node_id) ?>">Write something →</a>
+                    <a href="<?= h(edit_url($story_id, $node_id)) ?>">Write something →</a>
                 <?php endif; ?>
                 </em></p>
             <?php endif; ?>
@@ -330,7 +330,7 @@ if ($user && $is_root_node) {
                             <?php if (!empty($choice['quarantined'])): ?>
                                 <?php if ($can_access_quarantine_story): ?>
                                     <?php $child_id = basename($choice['node'], '.html'); ?>
-                                    <a href="<?= h($base) ?>/node.php?story=<?= h($story_id) ?>&id=<?= h($child_id) ?>"
+                                    <a href="<?= h(node_url($story_id, $child_id)) ?>"
                                        class="sw-choice-quarantined">
                                         <?= h($choice['text']) ?> <span class="sw-text-muted">[quarantined]</span>
                                     </a>
@@ -341,7 +341,7 @@ if ($user && $is_root_node) {
                                 <?php
                                 $child_id = basename($choice['node'], '.html');
                                 ?>
-                                <a href="<?= h($base) ?>/node.php?story=<?= h($story_id) ?>&id=<?= h($child_id) ?>">
+                                <a href="<?= h(node_url($story_id, $child_id)) ?>">
                                     <?= h($choice['text']) ?>
                                 </a>
                             <?php else: ?>
@@ -357,7 +357,7 @@ if ($user && $is_root_node) {
             <?php endif; ?>
 
             <!-- Custom choice form -->
-            <form class="sw-custom-choice" action="<?= h($base) ?>/play.php" method="POST">
+            <form class="sw-custom-choice" action="<?= h(app_url('play')) ?>" method="POST">
                 <input type="hidden" name="story_id" value="<?= h($story_id) ?>">
                 <input type="hidden" name="parent_node_id" value="<?= h($node_id) ?>">
                 <input type="hidden" name="_csrf_token" value="<?= h(csrf_token()) ?>">
@@ -404,11 +404,11 @@ if ($user && $is_root_node) {
         <!-- Footer -->
         <footer class="sw-node-footer">
             <?php if ($node['parent_id'] !== ''): ?>
-                <a class="sw-back" href="<?= h($base) ?>/node.php?story=<?= h($story_id) ?>&id=<?= h($node['parent_id']) ?>">
+                <a class="sw-back" href="<?= h(node_url($story_id, $node['parent_id'])) ?>">
                     ← Back
                 </a>
             <?php else: ?>
-                <a class="sw-back" href="<?= h($base) ?>/index.php">← All Stories</a>
+                <a class="sw-back" href="<?= h(app_url('index')) ?>">← All Stories</a>
             <?php endif; ?>
             <span class="sw-text-muted">
                 <?= h($node['node_id']) ?>
@@ -467,7 +467,7 @@ function render_404(string $message): void
     <div class="sw-container sw-text-center sw-mt-3">
         <h1>404 — Page Not Found</h1>
         <p><?= h($message) ?></p>
-        <a href="<?= h($base) ?>/index.php" class="sw-btn sw-btn-secondary sw-mt-2">← Back to Stories</a>
+        <a href="<?= h(app_url('index')) ?>" class="sw-btn sw-btn-secondary sw-mt-2">← Back to Stories</a>
     </div>
     <script src="<?= h($base) ?>/_assets/sw.js?v=<?= filemtime(sw_root() . '/_assets/sw.js') ?>"></script>
 </body>

@@ -13,7 +13,7 @@ require_once __DIR__ . '/_lib/api_keys.php';
 $user = current_user();
 if ($user === null) {
     flash('error', 'Please log in to access settings.');
-    redirect(base_url() . '/auth.php?action=login');
+    redirect(auth_url('login'));
 }
 
 $base = base_url();
@@ -255,7 +255,7 @@ $available_fallback_keys = array_values(array_filter($all_keys, function ($k) us
         <!-- ─── Profile Tab ─── -->
         <div class="sw-settings-section">
             <h2>Profile</h2>
-            <form method="POST" action="<?= h($base) ?>/settings.php?tab=profile">
+            <form method="POST" action="<?= h(app_url('settings', ['tab' => 'profile'])) ?>">
                 <input type="hidden" name="form_action" value="update_profile">
                 <input type="hidden" name="_csrf_token" value="<?= h(csrf_token()) ?>">
 
@@ -279,7 +279,7 @@ $available_fallback_keys = array_values(array_filter($all_keys, function ($k) us
         <!-- ─── Password Tab ─── -->
         <div class="sw-settings-section">
             <h2>Change Password</h2>
-            <form method="POST" action="<?= h($base) ?>/settings.php?tab=password">
+            <form method="POST" action="<?= h(app_url('settings', ['tab' => 'password'])) ?>">
                 <input type="hidden" name="form_action" value="change_password">
                 <input type="hidden" name="_csrf_token" value="<?= h(csrf_token()) ?>">
 
@@ -329,30 +329,30 @@ function handle_update_profile(array $user): void
 
     if ($username === '' || strlen($username) < 3 || strlen($username) > 30) {
         flash('error', 'Username must be 3–30 characters.');
-        redirect(base_url() . '/settings.php?tab=profile');
+        redirect(app_url('settings', ['tab' => 'profile']));
     }
 
     if (!preg_match('/^[a-zA-Z0-9_]+$/', $username)) {
         flash('error', 'Username may only contain letters, numbers, and underscores.');
-        redirect(base_url() . '/settings.php?tab=profile');
+        redirect(app_url('settings', ['tab' => 'profile']));
     }
 
     if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
         flash('error', 'A valid email address is required.');
-        redirect(base_url() . '/settings.php?tab=profile');
+        redirect(app_url('settings', ['tab' => 'profile']));
     }
 
     // Check for username collision with another user
     $existing = user_find_by_username($username);
     if ($existing !== null && $existing['id'] !== $user['id']) {
         flash('error', 'That username is already taken.');
-        redirect(base_url() . '/settings.php?tab=profile');
+        redirect(app_url('settings', ['tab' => 'profile']));
     }
 
     $existing_email = user_find_by_email($email);
     if ($existing_email !== null && $existing_email['id'] !== $user['id']) {
         flash('error', 'That email is already in use.');
-        redirect(base_url() . '/settings.php?tab=profile');
+        redirect(app_url('settings', ['tab' => 'profile']));
     }
 
     if ($username !== $current_username) {
@@ -360,7 +360,7 @@ function handle_update_profile(array $user): void
             api_keys_reencrypt_for_username($user['id'], $current_username, $username);
         } catch (RuntimeException $e) {
             flash('error', 'Profile update failed while re-encrypting API keys: ' . $e->getMessage());
-            redirect(base_url() . '/settings.php?tab=profile');
+            redirect(app_url('settings', ['tab' => 'profile']));
         }
     }
 
@@ -370,7 +370,7 @@ function handle_update_profile(array $user): void
     ]);
 
     flash('success', 'Profile updated.');
-    redirect(base_url() . '/settings.php?tab=profile');
+    redirect(app_url('settings', ['tab' => 'profile']));
 }
 
 /**
@@ -387,17 +387,17 @@ function handle_change_password(array $user): void
 
     if (!user_verify_password($user, $current)) {
         flash('error', 'Current password is incorrect.');
-        redirect(base_url() . '/settings.php?tab=password');
+        redirect(app_url('settings', ['tab' => 'password']));
     }
 
     if (strlen($new_pass) < 8) {
         flash('error', 'New password must be at least 8 characters.');
-        redirect(base_url() . '/settings.php?tab=password');
+        redirect(app_url('settings', ['tab' => 'password']));
     }
 
     if ($new_pass !== $confirm) {
         flash('error', 'New passwords do not match.');
-        redirect(base_url() . '/settings.php?tab=password');
+        redirect(app_url('settings', ['tab' => 'password']));
     }
 
     user_update($user['id'], [
@@ -405,5 +405,5 @@ function handle_change_password(array $user): void
     ]);
 
     flash('success', 'Password changed successfully.');
-    redirect(base_url() . '/settings.php?tab=password');
+    redirect(app_url('settings', ['tab' => 'password']));
 }

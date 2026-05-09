@@ -746,6 +746,19 @@ textarea.sw-theme-editor {
     margin-bottom: 0.5rem;
 }
 
+.sw-auth-brand {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+}
+
+.sw-auth-brand-icon {
+    width: 2.1rem;
+    height: 2.1rem;
+    flex: 0 0 auto;
+}
+
 .sw-auth-subtitle {
     text-align: center;
     color: var(--sw-color-text-muted);
@@ -1036,7 +1049,7 @@ textarea.sw-theme-editor {
     }
 
     .sw-nav-brand {
-        gap: 0;
+        gap: 0.35rem;
         font-size: 1rem;
     }
 
@@ -1044,9 +1057,13 @@ textarea.sw-theme-editor {
         gap: 0.25rem;
     }
 
-    .sw-nav-brand-text,
     .sw-nav-label {
         display: none;
+    }
+
+    .sw-nav-brand-text {
+        display: inline;
+        font-size: 0.95rem;
     }
 
     .sw-nav-link,
