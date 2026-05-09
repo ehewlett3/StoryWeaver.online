@@ -454,6 +454,39 @@ function node_update_meta(string $story_id, string $node_id, array $meta): void
 }
 
 /**
+ * Return true when a choice has not been linked to a child page yet.
+ */
+function node_choice_is_pending(array $choice): bool
+{
+    return empty($choice['node']);
+}
+
+/**
+ * Return all pending choices for a node.
+ *
+ * @return array<int, array>
+ */
+function node_pending_choices(array $node): array
+{
+    $pending = [];
+    foreach (($node['choices'] ?? []) as $choice) {
+        if (node_choice_is_pending($choice)) {
+            $pending[] = $choice;
+        }
+    }
+
+    return $pending;
+}
+
+/**
+ * Count pending choices on a node.
+ */
+function node_pending_choice_count(array $node): int
+{
+    return count(node_pending_choices($node));
+}
+
+/**
  * Update the choices section in an existing node HTML file.
  *
  * @param string $story_id Story ID.
@@ -576,6 +609,109 @@ function node_link_choice(string $story_id, string $parent_node_id, string $choi
     }
 
     return node_update_choices($story_id, $parent_node_id, $choices);
+}
+
+/**
+ * Update the text of a single pending choice.
+ */
+function node_update_pending_choice_text(string $story_id, string $node_id, int $choice_id, string $choice_text): bool
+{
+    $node = node_read($story_id, $node_id, true);
+    if ($node === null) {
+        return false;
+    }
+
+    $choices = $node['choices'] ?? [];
+    $updated = false;
+
+    foreach ($choices as &$choice) {
+        if ((int) ($choice['id'] ?? 0) !== $choice_id || !node_choice_is_pending($choice)) {
+            continue;
+        }
+
+        $choice['text'] = $choice_text;
+        $updated = true;
+        break;
+    }
+    unset($choice);
+
+    if (!$updated) {
+        return false;
+    }
+
+    return node_update_choices($story_id, $node_id, $choices);
+}
+
+/**
+ * Delete a single pending choice from a node.
+ */
+function node_delete_pending_choice(string $story_id, string $node_id, int $choice_id): bool
+{
+    $node = node_read($story_id, $node_id, true);
+    if ($node === null) {
+        return false;
+    }
+
+    $choices = [];
+    $deleted = false;
+
+    foreach (($node['choices'] ?? []) as $choice) {
+        if ((int) ($choice['id'] ?? 0) === $choice_id && node_choice_is_pending($choice)) {
+            $deleted = true;
+            continue;
+        }
+        $choices[] = $choice;
+    }
+
+    if (!$deleted) {
+        return false;
+    }
+
+    return node_update_choices($story_id, $node_id, array_values($choices));
+}
+
+/**
+ * Replace only the pending choices on a node, preserving linked choices.
+ *
+ * @param array<int, string> $pending_texts
+ */
+function node_replace_pending_choices(string $story_id, string $node_id, array $pending_texts): bool
+{
+    $node = node_read($story_id, $node_id, true);
+    if ($node === null) {
+        return false;
+    }
+
+    $choices = $node['choices'] ?? [];
+    $replacement_index = 0;
+    $max_choice_id = 0;
+
+    foreach ($choices as &$choice) {
+        $max_choice_id = max($max_choice_id, (int) ($choice['id'] ?? 0));
+        if (!node_choice_is_pending($choice)) {
+            continue;
+        }
+
+        if (!array_key_exists($replacement_index, $pending_texts)) {
+            return false;
+        }
+
+        $choice['text'] = $pending_texts[$replacement_index];
+        $replacement_index++;
+    }
+    unset($choice);
+
+    while ($replacement_index < count($pending_texts)) {
+        $max_choice_id++;
+        $choices[] = [
+            'id' => $max_choice_id,
+            'text' => $pending_texts[$replacement_index],
+            'node' => null,
+        ];
+        $replacement_index++;
+    }
+
+    return node_update_choices($story_id, $node_id, $choices);
 }
 
 /* ------------------------------------------------------------------

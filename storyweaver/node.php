@@ -76,6 +76,9 @@ foreach ($all_keys as $k) {
 $ai_available = !empty($text_keys);
 $has_image_model = !empty($image_keys);
 $can_regenerate_story = $user && $can_edit && $ai_available && node_can_regenerate($node);
+$pending_choices = node_pending_choices($node);
+$pending_choice_count = count($pending_choices);
+$pending_choices_need_review = !empty($node['sw_meta']['pending_choices_need_review']) && $pending_choice_count > 0;
 $story_scenario_essentials = '';
 $can_access_quarantine_story = story_user_can_access_quarantine($story_id, $user);
 
@@ -317,6 +320,17 @@ if ($user && $is_root_node) {
                     🔄 Regenerate Story
                 </button>
             <?php endif; ?>
+
+            <?php if ($user && $can_edit && $pending_choice_count > 0): ?>
+                <button type="button"
+                        id="sw-open-pending-choices-btn"
+                        class="sw-btn sw-btn-sm sw-btn-secondary"
+                        aria-haspopup="dialog"
+                        aria-controls="sw-pending-choice-modal">
+                    <?= $pending_choices_need_review ? '⚠️ Review Pending Choices' : '🧵 Pending Choices' ?>
+                    (<?= (int) $pending_choice_count ?>)
+                </button>
+            <?php endif; ?>
         </div>
         <?php endif; ?>
 
@@ -375,6 +389,67 @@ if ($user && $is_root_node) {
                 </button>
             <?php endif; ?>
         </section>
+
+        <?php if ($user && $can_edit && $pending_choice_count > 0): ?>
+            <div id="sw-pending-choice-modal" class="sw-modal-backdrop" aria-hidden="true">
+                <div class="sw-modal sw-pending-choice-modal" role="dialog" aria-modal="true" aria-labelledby="sw-pending-choice-modal-title">
+                    <div class="sw-modal-header">
+                        <h2 id="sw-pending-choice-modal-title">Pending Choices</h2>
+                        <button type="button" class="sw-modal-close" id="sw-close-pending-choices-btn" aria-label="Close">&times;</button>
+                    </div>
+
+                    <div class="sw-alert <?= $pending_choices_need_review ? 'sw-alert-warning' : 'sw-alert-info' ?> sw-pending-choice-review">
+                        <strong>
+                            <?= $pending_choices_need_review
+                                ? 'This page was edited, so its pending choices may need updating.'
+                                : 'This page still has pending choices you can maintain here.' ?>
+                        </strong>
+                        <p>
+                            <?php if ($ai_available): ?>
+                                Regenerate just the pending choices with AI, or edit/delete them manually below.
+                            <?php else: ?>
+                                No text AI key is currently available, so edit or delete the pending choices manually below.
+                            <?php endif; ?>
+                        </p>
+                        <?php if ($ai_available): ?>
+                            <button type="button"
+                                    id="sw-regenerate-pending-choices-btn"
+                                    class="sw-btn sw-btn-sm sw-btn-secondary"
+                                    data-story-id="<?= h($story_id) ?>"
+                                    data-node-id="<?= h($node_id) ?>">
+                                ✨ Regenerate Pending Choices
+                            </button>
+                        <?php endif; ?>
+                    </div>
+
+                    <div class="sw-pending-choice-manager">
+                        <?php foreach ($pending_choices as $choice): ?>
+                            <div class="sw-pending-choice-item"
+                                 data-story-id="<?= h($story_id) ?>"
+                                 data-node-id="<?= h($node_id) ?>"
+                                 data-choice-id="<?= (int) $choice['id'] ?>">
+                                <label class="sw-pending-choice-label" for="sw-pending-choice-<?= (int) $choice['id'] ?>">
+                                    Pending choice
+                                </label>
+                                <div class="sw-pending-choice-row">
+                                    <input type="text"
+                                           id="sw-pending-choice-<?= (int) $choice['id'] ?>"
+                                           class="sw-input sw-pending-choice-input"
+                                           value="<?= h($choice['text']) ?>"
+                                           maxlength="160">
+                                    <button type="button" class="sw-btn sw-btn-sm sw-btn-secondary sw-pending-choice-save-btn">
+                                        Save
+                                    </button>
+                                    <button type="button" class="sw-btn sw-btn-sm sw-btn-danger sw-pending-choice-delete-btn">
+                                        Delete
+                                    </button>
+                                </div>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+            </div>
+        <?php endif; ?>
 
         <?php if ($can_change_theme): ?>
         <!-- Per-story theme picker (story creator / admin on root node) -->

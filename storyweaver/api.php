@@ -31,6 +31,12 @@ switch ($action) {
     case 'save_node_text':
         handle_save_node_text();
         break;
+    case 'update_pending_choice':
+        handle_update_pending_choice();
+        break;
+    case 'delete_pending_choice':
+        handle_delete_pending_choice();
+        break;
     case 'generate_node':
         handle_generate_node();
         break;
@@ -42,6 +48,9 @@ switch ($action) {
         break;
     case 'regenerate_node':
         handle_regenerate_node();
+        break;
+    case 'regenerate_pending_choices':
+        handle_regenerate_pending_choices();
         break;
     case 'apply_regenerated_node':
         handle_apply_regenerated_node();
@@ -190,10 +199,118 @@ function handle_save_node_text(): void
         json_error('Failed to save node text.', 500);
     }
 
-    // Log the edit in metadata
-    node_meta_log($story_id, $node_id, $user['id'], 'edited');
+    $pending_choice_count = node_pending_choice_count($node);
+    $sw_meta = is_array($node['sw_meta'] ?? null) ? $node['sw_meta'] : [];
+    if ($pending_choice_count > 0) {
+        $sw_meta['pending_choices_need_review'] = true;
+    } else {
+        unset($sw_meta['pending_choices_need_review']);
+    }
+    $sw_meta = node_meta_append_history($sw_meta, $user['id'], 'edited');
+    node_update_meta($story_id, $node_id, $sw_meta);
 
-    json_success(['message' => 'Node text saved.']);
+    json_success([
+        'message' => 'Node text saved.',
+        'review_pending_choices' => ($pending_choice_count > 0),
+        'pending_choice_count' => $pending_choice_count,
+    ]);
+}
+
+/**
+ * Update the text of a single pending choice.
+ *
+ * Expects POST JSON body: { story_id, node_id, choice_id, choice_text, _csrf_token }
+ */
+function handle_update_pending_choice(): void
+{
+    $user = current_user();
+    if ($user === null) {
+        json_error('Authentication required.', 401);
+    }
+
+    $input = get_json_input();
+    csrf_check($input['_csrf_token'] ?? '');
+
+    $story_id = trim((string) ($input['story_id'] ?? ''));
+    $node_id = trim((string) ($input['node_id'] ?? ''));
+    $choice_id = (int) ($input['choice_id'] ?? 0);
+    $choice_text = normalize_choice_text((string) ($input['choice_text'] ?? ''));
+
+    if (!validate_id($story_id, 'story_') || !validate_id($node_id, 'node_') || $choice_id < 1) {
+        json_error('Invalid story, page, or choice ID.', 400);
+    }
+
+    if ($choice_text === '') {
+        json_error('Choice text is required.', 400);
+    }
+
+    $node = node_read_for_user($story_id, $node_id, $user);
+    if ($node === null) {
+        json_error('Node not found.', 404);
+    }
+
+    $can_edit = ($node['author_id'] ?? '') === $user['id']
+        || role_level($user['role']) >= role_level('editor');
+    if (!$can_edit) {
+        json_error('You do not have permission to edit this page.', 403);
+    }
+
+    if (!node_update_pending_choice_text($story_id, $node_id, $choice_id, $choice_text)) {
+        json_error('Pending choice not found.', 404);
+    }
+
+    $sw_meta = is_array($node['sw_meta'] ?? null) ? $node['sw_meta'] : [];
+    unset($sw_meta['pending_choices_need_review']);
+    $sw_meta = node_meta_append_history($sw_meta, $user['id'], 'pending_choice_edited');
+    node_update_meta($story_id, $node_id, $sw_meta);
+
+    json_success(['message' => 'Pending choice updated.']);
+}
+
+/**
+ * Delete a single pending choice.
+ *
+ * Expects POST JSON body: { story_id, node_id, choice_id, _csrf_token }
+ */
+function handle_delete_pending_choice(): void
+{
+    $user = current_user();
+    if ($user === null) {
+        json_error('Authentication required.', 401);
+    }
+
+    $input = get_json_input();
+    csrf_check($input['_csrf_token'] ?? '');
+
+    $story_id = trim((string) ($input['story_id'] ?? ''));
+    $node_id = trim((string) ($input['node_id'] ?? ''));
+    $choice_id = (int) ($input['choice_id'] ?? 0);
+
+    if (!validate_id($story_id, 'story_') || !validate_id($node_id, 'node_') || $choice_id < 1) {
+        json_error('Invalid story, page, or choice ID.', 400);
+    }
+
+    $node = node_read_for_user($story_id, $node_id, $user);
+    if ($node === null) {
+        json_error('Node not found.', 404);
+    }
+
+    $can_edit = ($node['author_id'] ?? '') === $user['id']
+        || role_level($user['role']) >= role_level('editor');
+    if (!$can_edit) {
+        json_error('You do not have permission to edit this page.', 403);
+    }
+
+    if (!node_delete_pending_choice($story_id, $node_id, $choice_id)) {
+        json_error('Pending choice not found.', 404);
+    }
+
+    $sw_meta = is_array($node['sw_meta'] ?? null) ? $node['sw_meta'] : [];
+    unset($sw_meta['pending_choices_need_review']);
+    $sw_meta = node_meta_append_history($sw_meta, $user['id'], 'pending_choice_deleted');
+    node_update_meta($story_id, $node_id, $sw_meta);
+
+    json_success(['message' => 'Pending choice deleted.']);
 }
 
 /**
@@ -480,10 +597,7 @@ function handle_regenerate_node(): void
     }
 
     $system_prompt = $prompt_bundle['system_prompt'];
-    $story_context = $prompt_bundle['story_context'];
-    if ($steer_prompt !== '') {
-        $story_context .= "\n\n[REGENERATION GUIDANCE]\nPlease revise the new page and its choices with this additional direction in mind: " . $steer_prompt;
-    }
+    $story_context = append_story_regeneration_guidance($prompt_bundle['story_context'], $steer_prompt);
     $active_key = $key_record;
     $provider = new AIProvider($active_key);
     $parsed = null;
@@ -581,6 +695,189 @@ function handle_regenerate_node(): void
 }
 
 /**
+ * Regenerate only the pending choices on an existing node.
+ *
+ * Expects POST JSON: { story_id, node_id, key_id?, steer_prompt?, _csrf_token }
+ */
+function handle_regenerate_pending_choices(): void
+{
+    $user = current_user();
+    if ($user === null) {
+        json_error('Authentication required.', 401);
+    }
+
+    $input = get_json_input();
+    csrf_check($input['_csrf_token'] ?? '');
+
+    $story_id = trim((string) ($input['story_id'] ?? ''));
+    $node_id = trim((string) ($input['node_id'] ?? ''));
+    $key_id = trim((string) ($input['key_id'] ?? ''));
+    $steer_prompt = trim((string) ($input['steer_prompt'] ?? ''));
+
+    if (!validate_id($story_id, 'story_') || !validate_id($node_id, 'node_')) {
+        json_error('Invalid story or page ID.', 400);
+    }
+
+    $node = node_read_for_user($story_id, $node_id, $user);
+    if ($node === null) {
+        json_error('Story node not found.', 404);
+    }
+
+    $can_edit = ($node['author_id'] ?? '') === $user['id']
+        || role_level($user['role']) >= role_level('editor');
+    if (!$can_edit) {
+        json_error('You do not have permission to edit this page.', 403);
+    }
+
+    $pending_choices = node_pending_choices($node);
+    $pending_choice_count = count($pending_choices);
+    if ($pending_choice_count === 0) {
+        json_error('This page has no pending choices to regenerate.', 400);
+    }
+
+    if ($key_id !== '' && validate_id($key_id, 'key_')) {
+        $key_record = api_key_find_by_id($key_id);
+        if ($key_record === null || ($key_record['status'] ?? '') !== 'active') {
+            $key_record = null;
+        } elseif (($key_error = api_key_access_error($key_record, $user)) !== null) {
+            json_error($key_error, 403);
+        }
+    } else {
+        $key_record = api_key_select_for_user($user['id']);
+    }
+
+    if ($key_record === null) {
+        json_error('No AI key available.', 400);
+    }
+
+    try {
+        $key_record = api_key_prepare_for_use($key_record);
+    } catch (RuntimeException $e) {
+        json_error($e->getMessage(), 500);
+    }
+
+    $locked_choices = [];
+    foreach (($node['choices'] ?? []) as $choice) {
+        if (!node_choice_is_pending($choice) && trim((string) ($choice['text'] ?? '')) !== '') {
+            $locked_choices[] = trim((string) $choice['text']);
+        }
+    }
+
+    $prompt_bundle = build_pending_choices_prompt_bundle(
+        $story_id,
+        $node_id,
+        $pending_choice_count,
+        $locked_choices,
+        true
+    );
+    $system_prompt = $prompt_bundle['system_prompt'];
+    $story_context = append_story_regeneration_guidance($prompt_bundle['story_context'], $steer_prompt);
+
+    $active_key = $key_record;
+    $provider = new AIProvider($active_key);
+    $choices = null;
+    $last_error = '';
+    $raw_response = '';
+
+    for ($attempt = 0; $attempt < 2; $attempt++) {
+        try {
+            if ($attempt === 0) {
+                $raw_response = $provider->generateText($system_prompt, $story_context);
+            } else {
+                $repair_msg = build_repair_prompt($raw_response);
+                $raw_response = $provider->generateText($system_prompt, $repair_msg);
+            }
+
+            $choices = parse_ai_choices_response($raw_response, $pending_choice_count);
+            if ($choices !== null) {
+                break;
+            }
+            $last_error = 'AI response was not valid choices JSON.';
+        } catch (RuntimeException $e) {
+            $last_error = $e->getMessage();
+            if (str_contains($last_error, 'Authentication failed')) {
+                api_key_mark_unavailable($active_key['id'], $last_error);
+                json_error('API key authentication failed and has been deactivated. ' . $last_error, 401);
+            }
+            break;
+        }
+    }
+
+    if ($choices === null && api_key_is_connection_error($last_error)) {
+        $fallback = api_key_get_fallback($key_record);
+        if ($fallback !== null) {
+            try {
+                $active_key = api_key_prepare_for_use($fallback);
+            } catch (RuntimeException $e) {
+                json_error($e->getMessage(), 500);
+            }
+
+            $provider = new AIProvider($active_key);
+            $last_error = '';
+            $raw_response = '';
+
+            for ($attempt = 0; $attempt < 2; $attempt++) {
+                try {
+                    if ($attempt === 0) {
+                        $raw_response = $provider->generateText($system_prompt, $story_context);
+                    } else {
+                        $repair_msg = build_repair_prompt($raw_response);
+                        $raw_response = $provider->generateText($system_prompt, $repair_msg);
+                    }
+
+                    $choices = parse_ai_choices_response($raw_response, $pending_choice_count);
+                    if ($choices !== null) {
+                        break;
+                    }
+                    $last_error = 'AI response was not valid choices JSON.';
+                } catch (RuntimeException $e) {
+                    $last_error = $e->getMessage();
+                    if (str_contains($last_error, 'Authentication failed')) {
+                        api_key_mark_unavailable($active_key['id'], $last_error);
+                        json_error('API key authentication failed and has been deactivated. ' . $last_error, 401);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    if ($choices === null) {
+        api_key_mark_unavailable($active_key['id'], $last_error);
+        json_error('AI generation failed: ' . $last_error, 502);
+    }
+
+    $normalized_choices = [];
+    foreach ($choices as $choice_text) {
+        $choice_text = normalize_choice_text($choice_text);
+        if ($choice_text !== '') {
+            $normalized_choices[] = $choice_text;
+        }
+    }
+
+    if (count($normalized_choices) !== $pending_choice_count) {
+        json_error('AI generation failed: the regenerated choices were incomplete.', 502);
+    }
+
+    if (!node_replace_pending_choices($story_id, $node_id, $normalized_choices)) {
+        json_error('Failed to update pending choices.', 500);
+    }
+
+    $sw_meta = is_array($node['sw_meta'] ?? null) ? $node['sw_meta'] : [];
+    unset($sw_meta['pending_choices_need_review']);
+    $sw_meta = node_meta_append_history($sw_meta, $user['id'], 'pending_choices_regenerated', $active_key['model_text'] ?? '');
+    node_update_meta($story_id, $node_id, $sw_meta);
+
+    json_success([
+        'message' => 'Pending choices regenerated.',
+        'choices' => $normalized_choices,
+        'ai_model' => $active_key['model_text'] ?? '',
+        'ai_provider' => $active_key['provider'] ?? '',
+        'ai_key_label' => $active_key['label'] ?? '',
+    ]);
+}
+
+/**
  * Stream a regenerated candidate for an existing node without applying it.
  *
  * Expects POST JSON: { story_id, node_id, key_id?, _csrf_token }
@@ -610,6 +907,7 @@ function handle_stream_regenerate_node(): void
     $story_id = trim($input['story_id'] ?? '');
     $node_id  = trim($input['node_id'] ?? '');
     $key_id   = trim($input['key_id'] ?? '');
+    $steer_prompt = trim((string) ($input['steer_prompt'] ?? ''));
 
     if (!validate_id($story_id, 'story_') || !validate_id($node_id, 'node_')) {
         sse_event('error', ['error' => 'Invalid story or page ID.']);
@@ -677,10 +975,7 @@ function handle_stream_regenerate_node(): void
     }
 
     $system_prompt = $prompt_bundle['system_prompt'];
-    $story_context = $prompt_bundle['story_context'];
-    if ($steer_prompt !== '') {
-        $story_context .= "\n\n[REGENERATION GUIDANCE]\nPlease revise the new page and its choices with this additional direction in mind: " . $steer_prompt;
-    }
+    $story_context = append_story_regeneration_guidance($prompt_bundle['story_context'], $steer_prompt);
     $provider = new AIProvider($key_record);
     $active_key = $key_record;
     $tokens_sent = 0;
@@ -1643,6 +1938,48 @@ function get_json_input(): array
 }
 
 /**
+ * Normalize manually entered or AI-generated choice text.
+ */
+function normalize_choice_text(string $choice_text): string
+{
+    $choice_text = html_entity_decode(strip_tags($choice_text), ENT_QUOTES, 'UTF-8');
+    $choice_text = preg_replace('/\s+/u', ' ', $choice_text) ?? $choice_text;
+    return trim(mb_substr($choice_text, 0, 160));
+}
+
+/**
+ * Append stronger steering guidance to a story-generation prompt.
+ */
+function append_story_regeneration_guidance(string $story_context, string $steer_prompt): string
+{
+    $steer_prompt = trim($steer_prompt);
+    if ($steer_prompt === '') {
+        return $story_context;
+    }
+
+    return $story_context
+        . "\n\n[IMPORTANT REGENERATION GUIDANCE]\n"
+        . "The user wants the new version to clearly incorporate this direction while staying coherent with the established story. "
+        . "Treat it as a concrete requirement for the regenerated text and choices:\n"
+        . $steer_prompt;
+}
+
+/**
+ * Append stronger steering guidance to an image-generation prompt.
+ */
+function append_image_regeneration_guidance(string $prompt, string $steer_prompt): string
+{
+    $steer_prompt = trim($steer_prompt);
+    if ($steer_prompt === '') {
+        return $prompt;
+    }
+
+    return $prompt
+        . "\n\nImportant regeneration guidance: Clearly incorporate the following direction into the new image while keeping the established scene, characters, and mood consistent: "
+        . $steer_prompt;
+}
+
+/**
  * Use the text AI to produce a brief visual-context summary for image generation.
  *
  * Walks the full story ancestor chain (excluding the current node) and asks the
@@ -1762,9 +2099,7 @@ function handle_generate_image(): void
     $steer_prompt = trim((string) ($input['steer_prompt'] ?? ''));
     $context_summary = build_image_context_summary($story_id, $node_id, $key_record, $user, $check_quarantine);
     $prompt     = build_image_prompt($story_id, $node_id, $context_summary, $check_quarantine);
-    if ($steer_prompt !== '') {
-        $prompt .= "\n\nAdditional direction for this regeneration: " . $steer_prompt;
-    }
+    $prompt = append_image_regeneration_guidance($prompt, $steer_prompt);
     try {
         $active_key = api_key_prepare_for_use($key_record);
     } catch (RuntimeException $e) {

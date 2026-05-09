@@ -149,7 +149,11 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function promptForOptionalGuidance(actionLabel) {
-        var text = window.prompt('Optional: add extra guidance for ' + actionLabel + '.', '');
+        var text = window.prompt(
+            'Optional: add extra guidance for ' + actionLabel + '. Leave it blank if you want.\n\n'
+            + 'Press OK to continue, or Cancel to cancel the regeneration.',
+            ''
+        );
         if (text === null) {
             return null;
         }
@@ -620,10 +624,6 @@ document.addEventListener('DOMContentLoaded', function () {
     var regenerateStoryBtn = document.getElementById('sw-regenerate-story-btn');
     if (regenerateStoryBtn) {
         regenerateStoryBtn.addEventListener('click', function () {
-            if (!confirm('Regenerate this page and replace its current AI choices?')) {
-                return;
-            }
-
             var steerPrompt = promptForOptionalGuidance('this story regeneration');
             if (steerPrompt === null) {
                 return;
@@ -674,6 +674,174 @@ document.addEventListener('DOMContentLoaded', function () {
             });
         });
     }
+
+    var pendingChoicesModal = document.getElementById('sw-pending-choice-modal');
+    var openPendingChoicesBtn = document.getElementById('sw-open-pending-choices-btn');
+    var closePendingChoicesBtn = document.getElementById('sw-close-pending-choices-btn');
+
+    function openPendingChoicesModal() {
+        if (!pendingChoicesModal) return;
+        pendingChoicesModal.classList.add('sw-modal-open');
+        pendingChoicesModal.setAttribute('aria-hidden', 'false');
+    }
+
+    function closePendingChoicesModal() {
+        if (!pendingChoicesModal) return;
+        pendingChoicesModal.classList.remove('sw-modal-open');
+        pendingChoicesModal.setAttribute('aria-hidden', 'true');
+        if (window.location.hash === '#sw-pending-choices') {
+            history.replaceState(null, '', window.location.pathname + window.location.search);
+        }
+    }
+
+    if (openPendingChoicesBtn && pendingChoicesModal) {
+        openPendingChoicesBtn.addEventListener('click', function () {
+            openPendingChoicesModal();
+        });
+    }
+
+    if (closePendingChoicesBtn && pendingChoicesModal) {
+        closePendingChoicesBtn.addEventListener('click', function () {
+            closePendingChoicesModal();
+        });
+    }
+
+    if (pendingChoicesModal) {
+        pendingChoicesModal.addEventListener('click', function (e) {
+            if (e.target === pendingChoicesModal) {
+                closePendingChoicesModal();
+            }
+        });
+
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape' && pendingChoicesModal.classList.contains('sw-modal-open')) {
+                closePendingChoicesModal();
+            }
+        });
+
+        if (window.location.hash === '#sw-pending-choices') {
+            openPendingChoicesModal();
+        }
+    }
+
+    var regeneratePendingChoicesBtn = document.getElementById('sw-regenerate-pending-choices-btn');
+    if (regeneratePendingChoicesBtn) {
+        regeneratePendingChoicesBtn.addEventListener('click', function () {
+            var steerPrompt = promptForOptionalGuidance('these pending choices');
+            if (steerPrompt === null) {
+                return;
+            }
+
+            var storyId = regeneratePendingChoicesBtn.getAttribute('data-story-id');
+            var nodeId = regeneratePendingChoicesBtn.getAttribute('data-node-id');
+            var keyId = getSelectedTextKeyId() || '';
+
+            regeneratePendingChoicesBtn.disabled = true;
+            regeneratePendingChoicesBtn.textContent = '✨ Regenerating…';
+
+            fetch(apiBase + '/api?action=regenerate_pending_choices', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    story_id: storyId,
+                    node_id: nodeId,
+                    key_id: keyId,
+                    steer_prompt: steerPrompt,
+                    _csrf_token: csrfValue
+                })
+            })
+            .then(function (res) { return res.json(); })
+            .then(function (data) {
+                if (data.ok) {
+                    closePendingChoicesModal();
+                    window.location.reload();
+                    return;
+                }
+                showFlash(data.error || 'Failed to regenerate pending choices.', 'error');
+                regeneratePendingChoicesBtn.disabled = false;
+                regeneratePendingChoicesBtn.textContent = '✨ Regenerate Pending Choices';
+            })
+            .catch(function (err) {
+                showFlash('Error: ' + err.message, 'error');
+                regeneratePendingChoicesBtn.disabled = false;
+                regeneratePendingChoicesBtn.textContent = '✨ Regenerate Pending Choices';
+            });
+        });
+    }
+
+    document.querySelectorAll('.sw-pending-choice-save-btn').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var item = btn.closest('.sw-pending-choice-item');
+            if (!item) return;
+
+            var input = item.querySelector('.sw-pending-choice-input');
+            var choiceText = input ? input.value.trim() : '';
+            if (!choiceText) {
+                showFlash('Choice text cannot be empty.', 'error');
+                return;
+            }
+
+            btn.disabled = true;
+            fetch(apiBase + '/api?action=update_pending_choice', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    story_id: item.dataset.storyId,
+                    node_id: item.dataset.nodeId,
+                    choice_id: Number(item.dataset.choiceId || 0),
+                    choice_text: choiceText,
+                    _csrf_token: csrfValue
+                })
+            })
+            .then(function (res) { return res.json(); })
+            .then(function (data) {
+                if (data.ok) {
+                    window.location.hash = 'sw-pending-choices';
+                    window.location.reload();
+                    return;
+                }
+                showFlash(data.error || 'Failed to update pending choice.', 'error');
+                btn.disabled = false;
+            })
+            .catch(function (err) {
+                showFlash('Error: ' + err.message, 'error');
+                btn.disabled = false;
+            });
+        });
+    });
+
+    document.querySelectorAll('.sw-pending-choice-delete-btn').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var item = btn.closest('.sw-pending-choice-item');
+            if (!item) return;
+
+            btn.disabled = true;
+            fetch(apiBase + '/api?action=delete_pending_choice', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    story_id: item.dataset.storyId,
+                    node_id: item.dataset.nodeId,
+                    choice_id: Number(item.dataset.choiceId || 0),
+                    _csrf_token: csrfValue
+                })
+            })
+            .then(function (res) { return res.json(); })
+            .then(function (data) {
+                if (data.ok) {
+                    window.location.hash = 'sw-pending-choices';
+                    window.location.reload();
+                    return;
+                }
+                showFlash(data.error || 'Failed to delete pending choice.', 'error');
+                btn.disabled = false;
+            })
+            .catch(function (err) {
+                showFlash('Error: ' + err.message, 'error');
+                btn.disabled = false;
+            });
+        });
+    });
 
     /* ==================================================================
      * Image Generation Button
@@ -1709,6 +1877,9 @@ document.addEventListener('DOMContentLoaded', function () {
                 updateStatus('Saved ✓');
                 // Redirect to the node page after saving
                 var base = editorContainer.dataset.cancelUrl;
+                if (data.review_pending_choices) {
+                    base += '#sw-pending-choices';
+                }
                 window.location.href = base;
             } else {
                 updateStatus('Error: ' + (data.error || 'Save failed'), true);

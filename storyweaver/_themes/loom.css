@@ -32,9 +32,15 @@
 
 body {
     background:
+        linear-gradient(180deg, rgba(17, 11, 7, 0.3), rgba(17, 11, 7, 0.16)),
         radial-gradient(circle at top, rgba(255, 249, 223, 0.65), transparent 38%),
         linear-gradient(180deg, rgba(73, 104, 47, 0.26), rgba(0, 0, 0, 0) 18%),
+        url('../_assets/sw-background.png'),
         linear-gradient(180deg, #e4d08a 0%, #c8b062 100%);
+    background-position: center top, center top, center top, center top, center top;
+    background-repeat: no-repeat, no-repeat, no-repeat, no-repeat, no-repeat;
+    background-size: auto, auto, auto, cover, cover;
+    background-attachment: scroll, scroll, scroll, fixed, fixed;
     color: var(--sw-color-text);
 }
 
@@ -72,6 +78,13 @@ body {
 .sw-container,
 .sw-container-narrow {
     position: relative;
+    margin-top: 1.25rem;
+    margin-bottom: 1.75rem;
+    background: rgba(233, 189, 95, 0.7);
+    border: 1px solid rgba(77, 58, 36, 0.16);
+    border-radius: 28px;
+    box-shadow: 0 24px 56px rgba(27, 18, 10, 0.22);
+    backdrop-filter: blur(6px);
 }
 
 .sw-card,

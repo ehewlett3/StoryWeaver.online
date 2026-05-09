@@ -228,6 +228,53 @@ function build_continuation_prompt_bundle(string $story_id, string $parent_node_
 }
 
 /**
+ * Build the exact prompt payload for regenerating only a node's pending choices.
+ *
+ * @param array<int, string> $locked_choices Choices that already link to child pages and must stay untouched.
+ * @return array{scenario_essentials: string, system_prompt: string, story_context: string}
+ */
+function build_pending_choices_prompt_bundle(string $story_id, string $node_id, int $pending_choice_count, array $locked_choices = [], bool $check_quarantine = false): array
+{
+    $scenario_essentials = story_get_scenario_essentials($story_id);
+    $entries = reconstruct_context($story_id, $node_id, $check_quarantine);
+    $entries = truncate_context($entries);
+
+    $parts = [];
+    if ($scenario_essentials !== '') {
+        $parts[] = "[SCENARIO ESSENTIALS]";
+        $parts[] = $scenario_essentials;
+        $parts[] = '';
+    }
+
+    $parts[] = "[CURRENT STORY CONTEXT — oldest to newest]";
+    foreach ($entries as $entry) {
+        if ($entry['choice_taken'] !== '') {
+            $parts[] = "> Player chose: " . $entry['choice_taken'];
+        }
+        if ($entry['paragraphs'] !== '') {
+            $parts[] = $entry['paragraphs'];
+        }
+    }
+
+    $parts[] = '';
+    $parts[] = "[TASK]";
+    $parts[] = "Generate exactly {$pending_choice_count} new pending choices for what could happen next from the current page.";
+    if (!empty($locked_choices)) {
+        $parts[] = "These existing choices are already linked to child pages and must remain distinct:";
+        foreach ($locked_choices as $choice_text) {
+            $parts[] = "- " . $choice_text;
+        }
+    }
+    $parts[] = "Do not repeat or closely paraphrase any locked choice.";
+
+    return [
+        'scenario_essentials' => $scenario_essentials,
+        'system_prompt' => get_pending_choices_system_prompt($pending_choice_count),
+        'story_context' => implode("\n", $parts),
+    ];
+}
+
+/**
  * Build the initial prompt for a brand-new story's first node.
  *
  * @param string $title              Story title.
@@ -245,6 +292,30 @@ function build_opening_prompt(string $title, string $scenario_essentials = ''): 
     $prompt .= "\n\nWrite the opening scene. Set the atmosphere, introduce the protagonist's situation, and present the first set of choices.";
 
     return $prompt;
+}
+
+/**
+ * System prompt for regenerating pending choices only.
+ */
+function get_pending_choices_system_prompt(int $choice_count): string
+{
+    return <<<PROMPT
+You are a collaborative storytelling engine for a choose-your-own-adventure game.
+Always respond with ONLY valid JSON matching this exact schema — no markdown fences, no extra keys, no preamble:
+
+{
+  "choices": [
+    {"id": 1, "text": "<short action phrase>"}
+  ]
+}
+
+Rules:
+- Return exactly {$choice_count} choices.
+- Each choice: 4–12 words, active voice, no punctuation at end.
+- Choices must fit the current scene and suggest meaningful next actions.
+- Do not repeat or closely paraphrase any locked existing choice listed by the user.
+- Never break the JSON schema.
+PROMPT;
 }
 
 /**
@@ -299,6 +370,46 @@ function parse_ai_response(string $raw_response): ?array
         'choices'     => $choices,
         'ending'      => !empty($data['ending']),
     ];
+}
+
+/**
+ * Parse an AI response that should contain only choices JSON.
+ *
+ * @return array<int, string>|null
+ */
+function parse_ai_choices_response(string $raw_response, int $expected_count = 0): ?array
+{
+    $text = trim($raw_response);
+
+    if (preg_match('/```(?:json)?\s*([\s\S]*)\s*```/', $text, $m)) {
+        $text = trim($m[1]);
+    }
+
+    if ($text !== '' && $text[0] !== '{') {
+        $brace = strpos($text, '{');
+        if ($brace !== false) {
+            $text = substr($text, $brace);
+        }
+    }
+
+    $data = json_decode($text, true);
+    if (!is_array($data) || !isset($data['choices']) || !is_array($data['choices'])) {
+        return null;
+    }
+
+    $choices = [];
+    foreach ($data['choices'] as $choice) {
+        $choice_text = $choice['text'] ?? null;
+        if (is_string($choice_text)) {
+            $choices[] = $choice_text;
+        }
+    }
+
+    if ($expected_count > 0 && count($choices) !== $expected_count) {
+        return null;
+    }
+
+    return $choices;
 }
 
 /**
