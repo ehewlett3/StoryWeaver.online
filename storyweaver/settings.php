@@ -42,6 +42,7 @@ $primary_key_id = $primary_key ? $primary_key['id'] : null;
 
 // Keys that can be chosen as a fallback: own keys + any "all"-scoped active keys
 $all_keys = api_keys_read();
+$default_public_key_id = api_key_default_public_id();
 $available_fallback_keys = array_values(array_filter($all_keys, function ($k) use ($user) {
     if (($k['status'] ?? '') !== 'active') {
         return false;
@@ -49,6 +50,32 @@ $available_fallback_keys = array_values(array_filter($all_keys, function ($k) us
     return ($k['owner_user_id'] ?? '') === $user['id']
         || ($k['scope'] ?? '') === 'all';
 }));
+
+$shared_active_keys = [];
+if (($user['role'] ?? '') === 'admin') {
+    foreach ($all_keys as $key) {
+        if (($key['scope'] ?? '') !== 'all' || ($key['status'] ?? '') !== 'active') {
+            continue;
+        }
+
+        $owner_label = trim((string) ($key['owner_username'] ?? ''));
+        if ($owner_label === '') {
+            $owner = user_find_by_id((string) ($key['owner_user_id'] ?? ''));
+            $owner_label = trim((string) ($owner['username'] ?? ''));
+        }
+        if ($owner_label === '') {
+            $owner_label = 'Unknown owner';
+        }
+
+        $shared_active_keys[] = [
+            'id' => $key['id'],
+            'label' => $key['label'],
+            'provider' => $key['provider'],
+            'model_text' => $key['model_text'] ?? '',
+            'owner' => $owner_label,
+        ];
+    }
+}
 
 // Render page
 ?>
@@ -121,6 +148,9 @@ $available_fallback_keys = array_values(array_filter($all_keys, function ($k) us
                                 <?php if ($key['id'] === $primary_key_id): ?>
                                     <span class="sw-badge sw-badge-primary">★ Primary</span>
                                 <?php endif; ?>
+                                <?php if (($key['scope'] ?? '') === 'all' && $key['id'] === $default_public_key_id): ?>
+                                    <span class="sw-badge sw-badge-primary">🌐 Default Public</span>
+                                <?php endif; ?>
                                 <span class="sw-text-muted">
                                     <?= h($key['provider']) ?> · <?= h($key['model_text']) ?>
                                     · scope: <?= h($key['scope']) ?>
@@ -161,6 +191,28 @@ $available_fallback_keys = array_values(array_filter($all_keys, function ($k) us
                             </div>
                         </div>
                     <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
+
+            <?php if (($user['role'] ?? '') === 'admin' && count($shared_active_keys) > 1): ?>
+                <div class="sw-settings-section" style="margin-top:1.5rem;">
+                    <h3>Default Public API Key</h3>
+                    <p class="sw-text-muted">Choose which shared key guests and users without a personal key should get by default.</p>
+                    <div class="sw-form-group">
+                        <label for="sw-default-public-key">Shared key</label>
+                        <select id="sw-default-public-key" class="sw-input">
+                            <option value="">Automatic — newest active shared key</option>
+                            <?php foreach ($shared_active_keys as $shared_key): ?>
+                                <option value="<?= h($shared_key['id']) ?>" <?= $shared_key['id'] === $default_public_key_id ? 'selected' : '' ?>>
+                                    <?= h($shared_key['label']) ?> — <?= h($shared_key['owner']) ?> (<?= h($shared_key['provider']) ?> · <?= h($shared_key['model_text']) ?>)
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="sw-form-actions">
+                        <button type="button" id="sw-save-default-public-key-btn" class="sw-btn sw-btn-secondary">Save Default Public Key</button>
+                        <span id="sw-default-public-key-status" class="sw-editor-status"></span>
+                    </div>
                 </div>
             <?php endif; ?>
 

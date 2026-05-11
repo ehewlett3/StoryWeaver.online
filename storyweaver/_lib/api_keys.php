@@ -185,6 +185,7 @@ function api_key_decrypt_secret(string $stored, string $username_salt): string
 function api_keys_normalize_storage(array $keys): array
 {
     $changed = false;
+    $default_public_ids = [];
 
     foreach ($keys as &$key) {
         $owner_salt = api_key_owner_salt($key);
@@ -198,8 +199,31 @@ function api_keys_normalize_storage(array $keys): array
             $key['api_key'] = api_key_encrypt_secret($stored_secret, $owner_salt);
             $changed = true;
         }
+
+        $is_default_public = !empty($key['is_default_public']);
+        $is_valid_default_public = (($key['scope'] ?? '') === 'all') && (($key['status'] ?? '') === 'active');
+        if ($is_default_public && !$is_valid_default_public) {
+            $key['is_default_public'] = false;
+            $changed = true;
+            $is_default_public = false;
+        }
+
+        if ($is_default_public) {
+            $default_public_ids[] = (string) ($key['id'] ?? '');
+        }
     }
     unset($key);
+
+    if (count($default_public_ids) > 1) {
+        $keep_id = end($default_public_ids);
+        foreach ($keys as &$key) {
+            if (!empty($key['is_default_public']) && ($key['id'] ?? '') !== $keep_id) {
+                $key['is_default_public'] = false;
+                $changed = true;
+            }
+        }
+        unset($key);
+    }
 
     return ['keys' => $keys, 'changed' => $changed];
 }
@@ -325,6 +349,7 @@ function api_key_create(array $params): array
             'model_image'     => $params['model_image'] ?? '',
             'scope'           => $params['scope'] ?? 'self',
             'fallback_key_id' => $params['fallback_key_id'] ?? null,
+            'is_default_public' => !empty($params['is_default_public']),
             'status'          => 'active',
             'last_failure'    => null,
             'shared_by'       => $params['owner_user_id'] ?? '',
@@ -510,17 +535,10 @@ function api_key_select_for_user(?string $user_id): ?array
         }
     }
 
-    // Priority 2: any "all" scoped active key (last one in array = most recently added)
-    $all_keys = [];
-    foreach ($keys as $key) {
-        if (($key['scope'] ?? '') === 'all'
-            && ($key['status'] ?? '') === 'active'
-            && api_key_access_error($key, $user) === null) {
-            $all_keys[] = $key;
-        }
-    }
-    if (!empty($all_keys)) {
-        return end($all_keys);
+    // Priority 2: default shared key, else newest active shared key
+    $shared_key = api_key_select_shared_for_user($keys, $user, false);
+    if ($shared_key !== null) {
+        return $shared_key;
     }
 
     if ($user !== null && ($user['role'] ?? '') === 'admin') {
@@ -559,17 +577,9 @@ function api_key_select_text_for_user(?string $user_id): ?array
         }
     }
 
-    $shared_keys = [];
-    foreach ($keys as $key) {
-        if (($key['scope'] ?? '') === 'all'
-            && ($key['status'] ?? '') === 'active'
-            && !empty($key['model_text'])
-            && api_key_access_error($key, $user) === null) {
-            $shared_keys[] = $key;
-        }
-    }
-    if (!empty($shared_keys)) {
-        return end($shared_keys);
+    $shared_key = api_key_select_shared_for_user($keys, $user, true);
+    if ($shared_key !== null) {
+        return $shared_key;
     }
 
     if ($user !== null && ($user['role'] ?? '') === 'admin') {
@@ -584,6 +594,105 @@ function api_key_select_text_for_user(?string $user_id): ?array
         if (!empty($admin_keys)) {
             return end($admin_keys);
         }
+    }
+
+    return null;
+}
+
+/**
+ * Return the explicitly configured default shared/public key ID, if any.
+ */
+function api_key_default_public_id(): ?string
+{
+    foreach (api_keys_read() as $key) {
+        if (!empty($key['is_default_public'])) {
+            return (string) ($key['id'] ?? '');
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Set or clear the default shared/public API key.
+ *
+ * @param string $id Shared key ID, or '' to clear the explicit default.
+ * @return bool True if the default was updated.
+ */
+function api_key_set_default_public(string $id): bool
+{
+    $path = api_keys_path();
+    $lock_path = $path . '.lock';
+
+    $lock = fopen($lock_path, 'c');
+    if (!$lock || !flock($lock, LOCK_EX)) {
+        return false;
+    }
+
+    try {
+        $normalized = api_keys_normalize_storage(api_keys_load_unlocked());
+        $keys = $normalized['keys'];
+        $target_found = ($id === '');
+        $target_valid = ($id === '');
+
+        foreach ($keys as &$key) {
+            $is_target = ($key['id'] ?? '') === $id;
+            if ($is_target) {
+                $target_found = true;
+                $target_valid = (($key['scope'] ?? '') === 'all') && (($key['status'] ?? '') === 'active');
+            }
+
+            $key['is_default_public'] = ($id !== '' && $is_target && $target_valid);
+        }
+        unset($key);
+
+        if (!$target_found || !$target_valid) {
+            return false;
+        }
+
+        api_keys_write($keys);
+        return true;
+    } finally {
+        flock($lock, LOCK_UN);
+        fclose($lock);
+    }
+}
+
+/**
+ * Select a shared/public key that the current user may use.
+ *
+ * Prefers the explicitly configured default shared key when valid.
+ *
+ * @param array $keys
+ */
+function api_key_select_shared_for_user(array $keys, ?array $user, bool $require_text_model): ?array
+{
+    $shared_keys = [];
+    $default_key = null;
+
+    foreach ($keys as $key) {
+        if (($key['scope'] ?? '') !== 'all'
+            || ($key['status'] ?? '') !== 'active'
+            || api_key_access_error($key, $user) !== null) {
+            continue;
+        }
+
+        if ($require_text_model && empty($key['model_text'])) {
+            continue;
+        }
+
+        $shared_keys[] = $key;
+        if (!empty($key['is_default_public'])) {
+            $default_key = $key;
+        }
+    }
+
+    if ($default_key !== null) {
+        return $default_key;
+    }
+
+    if (!empty($shared_keys)) {
+        return end($shared_keys);
     }
 
     return null;

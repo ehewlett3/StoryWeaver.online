@@ -76,6 +76,7 @@ $base = base_url();
             <p><strong>Guests</strong> can read stories, follow branches, and use shared AI keys. Logged-in contributors can also edit their own pages and manage their own API keys.</p>
             <p>Use <strong>📚 Stories</strong> to return to the main list. Use <strong>❓ Help</strong> any time you need a refresher on features or roles.</p>
             <p>To begin, click <strong>Begin New Story</strong>. You can start manually, let AI generate the opening, or start with AI and then branch into manual or custom-action play whenever you like.</p>
+            <p>Admins can also post a rich-text homepage <strong>Announcement</strong> above the story list for site news, events, or maintenance notes.</p>
         </section>
 
         <section id="story-flow" class="sw-help-section">
@@ -86,6 +87,7 @@ $base = base_url();
                 <li><strong>Pending choices</strong> do not have a child page yet, so following them creates the next page.</li>
                 <li><strong>Custom actions</strong> let you type your own next move in an AI-dungeon-style flow instead of choosing one of the listed options.</li>
                 <li><strong>Edit</strong> opens the rich-text editor for pages you are allowed to change.</li>
+                <li><strong>Latest Page</strong> lets admins jump straight to the newest page in a story from the story list or while viewing that story.</li>
                 <li><strong>Mixed play</strong> means one story can freely combine tap-to-choose branches, typed actions, AI continuation, and hand-written scenes.</li>
             </ul>
         </section>
@@ -98,6 +100,7 @@ $base = base_url();
                 <li><strong>Preview Prompts</strong> shows the exact system prompt, story context, and image prompt that would be sent.</li>
                 <li><strong>Regenerate Story</strong> creates a candidate replacement for the current page and its unlinked choices, then lets you compare the old and new versions before deciding.</li>
                 <li><strong>Generate Image</strong> and <strong>Regenerate Image</strong> create illustrations for the current page. Image regeneration lets you compare versions side by side.</li>
+                <li><strong>Abort</strong> appears on long-running generation overlays so you can cancel if a provider stalls instead of waiting for the full timeout.</li>
                 <li><strong>Regeneration guidance</strong> lets you add optional steering text when regenerating story text or images.</li>
             </ul>
         </section>
@@ -109,6 +112,7 @@ $base = base_url();
                 <li><strong>API Keys</strong> store provider, base URL, text model, image model, scope, and an optional fallback key.</li>
                 <li><strong>Fetch Models</strong> asks the configured provider for available models and fills the dropdowns.</li>
                 <li><strong>Edit</strong> lets you rename a key and change its settings without revealing the stored secret.</li>
+                <li><strong>Default Public API Key</strong> lets admins choose which shared <strong>All</strong>-scoped key guests and other users get by default when more than one shared key is active.</li>
                 <li><strong>Profile</strong> updates your username and email.</li>
                 <li><strong>Password</strong> changes your login password.</li>
             </ul>

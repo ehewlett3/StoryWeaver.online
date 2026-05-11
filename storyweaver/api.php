@@ -76,6 +76,9 @@ switch ($action) {
     case 'delete_api_key':
         handle_delete_api_key();
         break;
+    case 'set_default_public_api_key':
+        handle_set_default_public_api_key();
+        break;
     case 'generate_image':
         handle_generate_image();
         break;
@@ -1890,6 +1893,51 @@ function handle_delete_api_key(): void
 
     api_key_delete($key_id);
     json_success(['message' => 'Key deleted.']);
+}
+
+/**
+ * Set the default shared/public API key (admin only).
+ *
+ * Expects POST JSON: { key_id?, _csrf_token }
+ */
+function handle_set_default_public_api_key(): void
+{
+    $user = current_user();
+    if ($user === null || ($user['role'] ?? '') !== 'admin') {
+        json_error('Admin access required.', 403);
+    }
+
+    $input = get_json_input();
+    $csrf  = $input['_csrf_token'] ?? '';
+    if (!hash_equals(csrf_token(), $csrf)) {
+        json_error('Invalid CSRF token.', 403);
+    }
+
+    $key_id = trim((string) ($input['key_id'] ?? ''));
+    if ($key_id !== '' && !validate_id($key_id, 'key_')) {
+        json_error('Invalid key ID.', 400);
+    }
+
+    if ($key_id !== '') {
+        $key_record = api_key_find_by_id($key_id);
+        if ($key_record === null) {
+            json_error('Key not found.', 404);
+        }
+        if (($key_record['scope'] ?? '') !== 'all' || ($key_record['status'] ?? '') !== 'active') {
+            json_error('Only active shared keys can be set as the default public key.', 400);
+        }
+    }
+
+    if (!api_key_set_default_public($key_id)) {
+        json_error('Failed to update the default public key.', 500);
+    }
+
+    json_success([
+        'message' => $key_id === ''
+            ? 'Default public key cleared. Automatic selection will use the newest active shared key.'
+            : 'Default public key updated.',
+        'key_id' => $key_id,
+    ]);
 }
 
 /* ======================================================================

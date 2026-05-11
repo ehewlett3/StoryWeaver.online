@@ -753,11 +753,13 @@ textarea.sw-theme-editor {
     background: var(--sw-color-surface);
     border: 1px solid var(--sw-color-border);
     border-radius: var(--sw-radius);
-    transition: box-shadow 0.15s;
+    transition: box-shadow 0.18s ease, transform 0.18s ease, border-color 0.18s ease;
 }
 
 .sw-story-item:hover {
     box-shadow: var(--sw-shadow-lg);
+    transform: translateY(-2px);
+    border-color: var(--sw-color-primary);
 }
 
 .sw-story-item-main {
@@ -766,6 +768,20 @@ textarea.sw-theme-editor {
     gap: 1rem;
     color: inherit;
     text-decoration: none;
+}
+
+.sw-story-item-main:hover,
+.sw-story-item-main:hover .sw-story-item-title,
+.sw-story-item-main:hover .sw-story-item-meta,
+.sw-story-item-main:hover .sw-story-item-snippet {
+    color: inherit;
+    text-decoration: none;
+}
+
+.sw-story-item-main:focus-visible {
+    outline: 2px solid var(--sw-color-primary);
+    outline-offset: 4px;
+    border-radius: calc(var(--sw-radius) - 2px);
 }
 
 .sw-story-item-actions {

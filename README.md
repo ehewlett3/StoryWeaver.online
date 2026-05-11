@@ -9,8 +9,8 @@ The repository root intentionally stays minimal: the deployable app is the `stor
 ## Features
 
 - **Branching stories** — Each page offers choices that lead to new pages, forming a tree of narrative paths
-- **AI-powered generation** — Generate story content using OpenAI, Anthropic, Ollama, or any OpenAI-compatible API
-- **Real-time streaming** — Watch AI-generated text appear token by token via Server-Sent Events
+- **AI-powered generation** — Generate story content using OpenAI, Anthropic, Gemini, Ollama, or any OpenAI-compatible API
+- **Real-time streaming** — Watch AI-generated text appear token by token via Server-Sent Events, with abort controls if a request stalls
 - **Image generation** — Create illustrations for story pages using DALL-E, GPT Image, Flux, or compatible image models
 - **Image management** — Regenerate images with side-by-side comparison, delete unwanted images
 - **Multiple API keys** — Configure multiple AI providers with user-scoped or shared access
@@ -38,6 +38,7 @@ No Composer, npm, Node.js, or database is required.
 - **Ollama** — For local AI text and image generation (free, no API key required)
 - **OpenAI API key** — For GPT models and DALL-E/GPT Image generation
 - **Anthropic API key** — For Claude models
+- **Google AI Studio / Gemini API key** — For Gemini text generation
 - **SMTP/mail()** — For email-based password reset (falls back to displaying reset links)
 
 ## Installation
@@ -92,6 +93,7 @@ After creating your admin account, go to **⚙️ Settings → API Keys** and ad
 | Provider | Base URL | API Key | Text Model | Image Model |
 |----------|----------|---------|------------|-------------|
 | **OpenAI** | `https://api.openai.com/v1` | Your API key | `gpt-4o-mini`, `gpt-4o` | `gpt-image-1`, `dall-e-3` |
+| **Gemini** | `https://generativelanguage.googleapis.com/v1beta` | Your API key | `gemini-2.5-flash`, `gemini-2.0-flash` | *(none)* |
 | **Ollama** (local) | `http://localhost:11434/v1` | *(leave blank)* | `gemma3:4b`, `llama3.2` | `x/flux2-klein` |
 | **Anthropic** | `https://api.anthropic.com` | Your API key | `claude-sonnet-4-20250514` | *(none)* |
 | **OpenAI-compatible** | Your endpoint URL | Your API key | Model name | Model name |
@@ -102,6 +104,8 @@ After creating your admin account, go to **⚙️ Settings → API Keys** and ad
 - **All** — Any user (including guests) can use this key
 
 Set at least one key with **All** scope to enable AI features for guest users.
+
+If multiple **All** keys are active, an admin can choose the **default public key** from **⚙️ Settings → API Keys** so guests and users without their own key use the intended shared provider first.
 
 ### Theme Management
 
@@ -179,6 +183,7 @@ Each story page is a complete, valid HTML document containing:
 
 The `AIProvider` class normalizes requests across providers:
 - **Text generation**: Streaming via SSE (Server-Sent Events) with real-time token display
+- **Abort controls**: Long-running generation requests can be cancelled from the live overlay instead of waiting for the full timeout
 - **Image generation**: Supports OpenAI image API and Ollama's native generation endpoint
 - **Context reconstruction**: Walks the parent chain to build conversation history, auto-truncates to stay within token limits
 - **Prompt engineering**: Structured prompts that return JSON with paragraphs and choices

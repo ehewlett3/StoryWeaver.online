@@ -1608,6 +1608,47 @@ document.addEventListener('DOMContentLoaded', function () {
             });
         });
 
+        var defaultPublicKeySelect = document.getElementById('sw-default-public-key');
+        var defaultPublicKeyBtn = document.getElementById('sw-save-default-public-key-btn');
+        var defaultPublicKeyStatus = document.getElementById('sw-default-public-key-status');
+
+        function setDefaultPublicKeyStatus(message, isError) {
+            if (!defaultPublicKeyStatus) return;
+            defaultPublicKeyStatus.textContent = message || '';
+            defaultPublicKeyStatus.className = 'sw-editor-status' + (isError ? ' sw-editor-status-error' : '');
+        }
+
+        if (defaultPublicKeyBtn && defaultPublicKeySelect) {
+            defaultPublicKeyBtn.addEventListener('click', function () {
+                defaultPublicKeyBtn.disabled = true;
+                setDefaultPublicKeyStatus('Saving…', false);
+
+                fetch(apiBase + '/api?action=set_default_public_api_key', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        key_id: defaultPublicKeySelect.value || '',
+                        _csrf_token: csrfValue
+                    })
+                })
+                .then(function (res) { return res.json(); })
+                .then(function (data) {
+                    if (data.ok) {
+                        setDefaultPublicKeyStatus('Saved ✓', false);
+                        setTimeout(function () { window.location.reload(); }, 400);
+                    } else {
+                        setDefaultPublicKeyStatus('Error: ' + (data.error || 'Save failed'), true);
+                    }
+                })
+                .catch(function (err) {
+                    setDefaultPublicKeyStatus('Error: ' + err.message, true);
+                })
+                .finally(function () {
+                    defaultPublicKeyBtn.disabled = false;
+                });
+            });
+        }
+
         // Edit, Test, Deactivate, Reactivate, Delete buttons (delegated)
         document.addEventListener('click', function (e) {
             var btn = e.target.closest('[data-key-id]');
@@ -2190,9 +2231,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     if (announcementSourceToggle && announcementSource && announcementContent) {
         announcementSourceToggle.addEventListener('click', function () {
-            announcementSourceMode = !announcementSourceMode;
-
-            if (announcementSourceMode) {
+            if (!announcementSourceMode) {
                 var paragraphs = announcementContent.querySelectorAll('.sw-para');
                 var html = '';
                 paragraphs.forEach(function (p) {
@@ -2202,6 +2241,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 announcementContent.style.display = 'none';
                 announcementSource.style.display = 'block';
                 announcementSourceToggle.textContent = '🔤 Visual';
+                announcementSourceMode = true;
                 announcementSource.focus();
             } else {
                 announcementExitSourceMode();
