@@ -115,7 +115,10 @@ document.addEventListener('DOMContentLoaded', function () {
             '    <span class="sw-gen-key-label"></span>' +
             '  </div>' +
             '  <div class="sw-gen-text"></div>' +
-            '  <div class="sw-gen-status"></div>' +
+            '  <div class="sw-gen-status">This can take a while. You can abort if it stalls.</div>' +
+            '  <div class="sw-gen-actions">' +
+            '    <button type="button" class="sw-btn sw-btn-secondary sw-gen-abort">Abort</button>' +
+            '  </div>' +
             '</div>';
         document.body.appendChild(overlay);
         // Force reflow then add open class for animation
@@ -205,7 +208,46 @@ document.addEventListener('DOMContentLoaded', function () {
         var statusEl = overlay.querySelector('.sw-gen-status');
         var keyLabelEl = overlay.querySelector('.sw-gen-key-label');
         var headerEl = overlay.querySelector('.sw-gen-header');
+        var abortBtn = overlay.querySelector('.sw-gen-abort');
         var streamBuffer = ''; // accumulates all raw tokens
+        var reader = null;
+        var controller = typeof AbortController === 'function' ? new AbortController() : null;
+        var finished = false;
+        var abortedByUser = false;
+
+        function removeAbortButton() {
+            if (abortBtn && abortBtn.parentNode) {
+                abortBtn.parentNode.remove();
+                abortBtn = null;
+            }
+        }
+
+        function handleUserAbort() {
+            if (finished) {
+                return;
+            }
+
+            finished = true;
+            abortedByUser = true;
+            statusEl.textContent = 'Aborting…';
+            if (abortBtn) {
+                abortBtn.disabled = true;
+                abortBtn.textContent = 'Aborting…';
+            }
+            if (reader) {
+                reader.cancel().catch(function () {});
+            }
+            if (controller) {
+                controller.abort();
+            } else {
+                overlay.remove();
+                showFlash('Generation cancelled.', 'info');
+            }
+        }
+
+        if (abortBtn) {
+            abortBtn.addEventListener('click', handleUserAbort);
+        }
 
         // Extract readable paragraph text from the streaming JSON buffer.
         // The AI response format is: {"paragraphs":["text","text"],"choices":[...]}
@@ -268,16 +310,21 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         // Use fetch + ReadableStream for SSE (more control than EventSource for POST)
-        fetch(apiBase + '/api?action=' + (options.action || 'stream_generate_node'), {
+        var requestOptions = {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
-        }).then(function (response) {
+        };
+        if (controller) {
+            requestOptions.signal = controller.signal;
+        }
+
+        fetch(apiBase + '/api?action=' + (options.action || 'stream_generate_node'), requestOptions).then(function (response) {
             if (!response.ok || !response.body) {
                 throw new Error('Stream unavailable');
             }
 
-            var reader = response.body.getReader();
+            reader = response.body.getReader();
             var decoder = new TextDecoder();
             var buffer = '';
 
@@ -319,6 +366,8 @@ document.addEventListener('DOMContentLoaded', function () {
                                 statusEl.textContent = data.message;
                             }
                         } else if (eventType === 'done') {
+                            finished = true;
+                            removeAbortButton();
                             var data;
                             try { data = JSON.parse(rawData); } catch (e) { return; }
                             if (options.onDone) {
@@ -328,6 +377,8 @@ document.addEventListener('DOMContentLoaded', function () {
                                 showDropInResult(overlay, data, options);
                             }
                         } else if (eventType === 'error') {
+                            finished = true;
+                            removeAbortButton();
                             var data;
                             try { data = JSON.parse(rawData); } catch (e) { return; }
                             headerEl.querySelector('.sw-gen-spinner').textContent = '\u274C';
@@ -344,8 +395,15 @@ document.addEventListener('DOMContentLoaded', function () {
                         }
                     });
 
-                    read();
+                    if (!finished) {
+                        read();
+                    }
                 }).catch(function () {
+                    if (abortedByUser) {
+                        overlay.remove();
+                        showFlash('Generation cancelled.', 'info');
+                        return;
+                    }
                     // Stream error — fall back
                     if (options.onFallback) {
                         overlay.remove();
@@ -355,7 +413,12 @@ document.addEventListener('DOMContentLoaded', function () {
             }
 
             read();
-        }).catch(function () {
+        }).catch(function (err) {
+            if (abortedByUser || (err && err.name === 'AbortError')) {
+                overlay.remove();
+                showFlash('Generation cancelled.', 'info');
+                return;
+            }
             // Fetch failed — fall back to form POST
             overlay.remove();
             if (options.onFallback) {
@@ -374,6 +437,11 @@ document.addEventListener('DOMContentLoaded', function () {
         var headerEl = modal.querySelector('.sw-gen-header');
         var textEl = modal.querySelector('.sw-gen-text');
         var statusEl = modal.querySelector('.sw-gen-status');
+        var actionEl = modal.querySelector('.sw-gen-actions');
+
+        if (actionEl) {
+            actionEl.remove();
+        }
 
         headerEl.querySelector('.sw-gen-spinner').textContent = '\u2705';
         headerEl.querySelector('.sw-gen-title').textContent = options.doneTitle || 'Story generated!';
@@ -726,7 +794,14 @@ document.addEventListener('DOMContentLoaded', function () {
 
     var regeneratePendingChoicesBtn = document.getElementById('sw-regenerate-pending-choices-btn');
     if (regeneratePendingChoicesBtn) {
+        var regeneratePendingChoicesController = null;
+
         regeneratePendingChoicesBtn.addEventListener('click', function () {
+            if (regeneratePendingChoicesController) {
+                regeneratePendingChoicesController.abort();
+                return;
+            }
+
             var steerPrompt = promptForOptionalGuidance('these pending choices');
             if (steerPrompt === null) {
                 return;
@@ -736,10 +811,14 @@ document.addEventListener('DOMContentLoaded', function () {
             var nodeId = regeneratePendingChoicesBtn.getAttribute('data-node-id');
             var keyId = getSelectedTextKeyId() || '';
 
-            regeneratePendingChoicesBtn.disabled = true;
-            regeneratePendingChoicesBtn.textContent = '✨ Regenerating…';
+            regeneratePendingChoicesController = typeof AbortController === 'function' ? new AbortController() : null;
+            regeneratePendingChoicesBtn.disabled = !regeneratePendingChoicesController;
+            regeneratePendingChoicesBtn.textContent = regeneratePendingChoicesController
+                ? '✖ Abort Pending-Choice Regeneration'
+                : '✨ Regenerating…';
+            regeneratePendingChoicesBtn.classList.toggle('sw-btn-danger', !!regeneratePendingChoicesController);
 
-            fetch(apiBase + '/api?action=regenerate_pending_choices', {
+            var regeneratePendingChoicesRequest = {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -749,6 +828,16 @@ document.addEventListener('DOMContentLoaded', function () {
                     steer_prompt: steerPrompt,
                     _csrf_token: csrfValue
                 })
+            };
+            if (regeneratePendingChoicesController) {
+                regeneratePendingChoicesRequest.signal = regeneratePendingChoicesController.signal;
+            }
+
+            fetch(apiBase + '/api?action=regenerate_pending_choices', {
+                method: regeneratePendingChoicesRequest.method,
+                headers: regeneratePendingChoicesRequest.headers,
+                body: regeneratePendingChoicesRequest.body,
+                signal: regeneratePendingChoicesRequest.signal
             })
             .then(function (res) { return res.json(); })
             .then(function (data) {
@@ -758,13 +847,19 @@ document.addEventListener('DOMContentLoaded', function () {
                     return;
                 }
                 showFlash(data.error || 'Failed to regenerate pending choices.', 'error');
-                regeneratePendingChoicesBtn.disabled = false;
-                regeneratePendingChoicesBtn.textContent = '✨ Regenerate Pending Choices';
             })
             .catch(function (err) {
+                if (err && err.name === 'AbortError') {
+                    showFlash('Pending-choice regeneration cancelled.', 'info');
+                    return;
+                }
                 showFlash('Error: ' + err.message, 'error');
+            })
+            .finally(function () {
+                regeneratePendingChoicesController = null;
                 regeneratePendingChoicesBtn.disabled = false;
                 regeneratePendingChoicesBtn.textContent = '✨ Regenerate Pending Choices';
+                regeneratePendingChoicesBtn.classList.remove('sw-btn-danger');
             });
         });
     }
@@ -849,15 +944,24 @@ document.addEventListener('DOMContentLoaded', function () {
 
     var genImageBtn = document.getElementById('sw-gen-image-btn');
     if (genImageBtn) {
+        var genImageController = null;
+
         genImageBtn.addEventListener('click', function () {
+            if (genImageController) {
+                genImageController.abort();
+                return;
+            }
+
             var storyId = genImageBtn.getAttribute('data-story-id');
             var nodeId = genImageBtn.getAttribute('data-node-id');
             var keyId = getSelectedImageKeyId() || getSelectedTextKeyId();
 
-            genImageBtn.disabled = true;
-            genImageBtn.textContent = '🖼️ Generating…';
+            genImageController = typeof AbortController === 'function' ? new AbortController() : null;
+            genImageBtn.disabled = !genImageController;
+            genImageBtn.textContent = genImageController ? '✖ Abort Image Generation' : '🖼️ Generating…';
+            genImageBtn.classList.toggle('sw-btn-danger', !!genImageController);
 
-            fetch('api?action=generate_image', {
+            var generateImageRequest = {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -866,7 +970,12 @@ document.addEventListener('DOMContentLoaded', function () {
                     key_id: keyId,
                     _csrf_token: csrfValue
                 })
-            })
+            };
+            if (genImageController) {
+                generateImageRequest.signal = genImageController.signal;
+            }
+
+            fetch('api?action=generate_image', generateImageRequest)
             .then(function (res) { return res.json(); })
             .then(function (data) {
                 if (data.ok && data.image_url) {
@@ -881,14 +990,23 @@ document.addEventListener('DOMContentLoaded', function () {
                     genImageBtn.remove();
                 } else {
                     alert(data.error || 'Image generation failed.');
-                    genImageBtn.disabled = false;
-                    genImageBtn.textContent = '🖼️ Generate Image';
                 }
             })
-            .catch(function () {
+            .catch(function (err) {
+                if (err && err.name === 'AbortError') {
+                    showFlash('Image generation cancelled.', 'info');
+                    return;
+                }
                 alert('Image generation request failed.');
+            })
+            .finally(function () {
+                genImageController = null;
+                if (!document.body.contains(genImageBtn)) {
+                    return;
+                }
                 genImageBtn.disabled = false;
                 genImageBtn.textContent = '🖼️ Generate Image';
+                genImageBtn.classList.remove('sw-btn-danger');
             });
         });
     }
@@ -1033,7 +1151,14 @@ document.addEventListener('DOMContentLoaded', function () {
 
     var regenImageBtn = document.getElementById('sw-regen-image-btn');
     if (regenImageBtn) {
+        var regenImageController = null;
+
         regenImageBtn.addEventListener('click', function () {
+            if (regenImageController) {
+                regenImageController.abort();
+                return;
+            }
+
             var steerPrompt = promptForOptionalGuidance('this image regeneration');
             if (steerPrompt === null) {
                 return;
@@ -1044,10 +1169,12 @@ document.addEventListener('DOMContentLoaded', function () {
             var existingUrl = regenImageBtn.getAttribute('data-existing-image');
             var keyId = getSelectedImageKeyId() || getSelectedTextKeyId();
 
-            regenImageBtn.disabled = true;
-            regenImageBtn.textContent = '🖼️ Generating new image…';
+            regenImageController = typeof AbortController === 'function' ? new AbortController() : null;
+            regenImageBtn.disabled = !regenImageController;
+            regenImageBtn.textContent = regenImageController ? '✖ Abort Image Regeneration' : '🖼️ Generating new image…';
+            regenImageBtn.classList.toggle('sw-btn-danger', !!regenImageController);
 
-            fetch('api?action=generate_image', {
+            var regenerateImageRequest = {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -1057,23 +1184,32 @@ document.addEventListener('DOMContentLoaded', function () {
                     steer_prompt: steerPrompt,
                     _csrf_token: csrfValue
                 })
-            })
+            };
+            if (regenImageController) {
+                regenerateImageRequest.signal = regenImageController.signal;
+            }
+
+            fetch('api?action=generate_image', regenerateImageRequest)
             .then(function (res) { return res.json(); })
             .then(function (data) {
                 if (data.ok && data.image_url) {
                     showImageCompareModal(existingUrl, data.image_url);
-                    regenImageBtn.disabled = false;
-                    regenImageBtn.textContent = '🖼️ Regenerate Image';
                 } else {
                     alert(data.error || 'Image generation failed.');
-                    regenImageBtn.disabled = false;
-                    regenImageBtn.textContent = '🖼️ Regenerate Image';
                 }
             })
-            .catch(function () {
+            .catch(function (err) {
+                if (err && err.name === 'AbortError') {
+                    showFlash('Image regeneration cancelled.', 'info');
+                    return;
+                }
                 alert('Image generation request failed.');
+            })
+            .finally(function () {
+                regenImageController = null;
                 regenImageBtn.disabled = false;
                 regenImageBtn.textContent = '🖼️ Regenerate Image';
+                regenImageBtn.classList.remove('sw-btn-danger');
             });
         });
     }
@@ -1214,6 +1350,7 @@ document.addEventListener('DOMContentLoaded', function () {
         var defaultUrls = {
             openai: 'https://api.openai.com/v1',
             anthropic: 'https://api.anthropic.com',
+            gemini: 'https://generativelanguage.googleapis.com/v1beta',
             ollama: 'http://localhost:11434/v1',
             custom: ''
         };
@@ -1391,9 +1528,14 @@ document.addEventListener('DOMContentLoaded', function () {
                     apiKeyNote.textContent = 'Stored securely. The existing secret is kept as-is.';
                     return;
                 }
+                apiKeyInput.placeholder = providerInput.value === 'gemini'
+                    ? 'AIza...'
+                    : 'sk-...';
                 apiKeyNote.textContent = providerInput.value === 'ollama'
                     ? 'Not needed for local Ollama.'
-                    : 'Stored securely after you save it.';
+                    : (providerInput.value === 'gemini'
+                        ? 'Stored securely after you save it. Free AI Studio keys can be quota-, region-, or model-limited, so use Fetch Models to pick an available Gemini text model.'
+                        : 'Stored securely after you save it.');
             });
         }
 
@@ -1911,6 +2053,204 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
     }  // end if (editorContainer)
+
+    /* ==================================================================
+     * Homepage Announcement Editor
+     * ================================================================*/
+
+    var announcementEditor = document.getElementById('sw-announcement-editor');
+
+    if (announcementEditor) {
+
+    var announcementForm = announcementEditor.closest('form');
+    var announcementSaveBtn = document.getElementById('sw-announcement-editor-save');
+    var announcementCancelBtn = document.getElementById('sw-announcement-editor-cancel');
+    var announcementAddParaBtn = document.getElementById('sw-announcement-add-para');
+    var announcementSourceToggle = document.getElementById('sw-announcement-source-toggle');
+    var announcementContent = document.getElementById('sw-announcement-editor-content');
+    var announcementSource = document.getElementById('sw-announcement-editor-source');
+    var announcementStatus = document.getElementById('sw-announcement-editor-status');
+    var announcementHiddenInput = document.getElementById('sw-announcement-paragraphs-input');
+    var announcementDetails = document.getElementById('sw-announcement-details');
+    var announcementOriginal = [];
+    try {
+        announcementOriginal = JSON.parse(announcementEditor.dataset.originalParagraphs || '[]');
+    } catch (e) {
+        announcementOriginal = [];
+    }
+
+    var announcementSourceMode = false;
+    var announcementUnsaved = false;
+
+    function setAnnouncementStatus(text, isError) {
+        if (!announcementStatus) return;
+        announcementStatus.textContent = text;
+        announcementStatus.className = 'sw-editor-status' + (isError ? ' sw-editor-status-error' : '');
+    }
+
+    function markAnnouncementDirty() {
+        announcementUnsaved = true;
+        setAnnouncementStatus('Unsaved changes');
+    }
+
+    function announcementPopulateParagraphs(paragraphs) {
+        announcementContent.innerHTML = '';
+        if (!Array.isArray(paragraphs) || paragraphs.length === 0) {
+            var emptyPara = document.createElement('p');
+            emptyPara.className = 'sw-para';
+            emptyPara.setAttribute('contenteditable', 'true');
+            announcementContent.appendChild(emptyPara);
+            return;
+        }
+
+        paragraphs.forEach(function (paragraph) {
+            var para = document.createElement('p');
+            para.className = 'sw-para';
+            para.setAttribute('contenteditable', 'true');
+            para.innerHTML = paragraph;
+            announcementContent.appendChild(para);
+        });
+    }
+
+    function announcementCollectParagraphs() {
+        var paragraphs = [];
+
+        if (announcementSourceMode) {
+            var lines = announcementSource.value.split(/\n\n+/);
+            lines.forEach(function (line) {
+                line = line.trim();
+                if (line !== '') {
+                    paragraphs.push(line);
+                }
+            });
+            return paragraphs;
+        }
+
+        announcementContent.querySelectorAll('.sw-para').forEach(function (p) {
+            var html = p.innerHTML.trim();
+            if (html !== '' && html !== '<br>') {
+                paragraphs.push(html);
+            }
+        });
+
+        return paragraphs;
+    }
+
+    function announcementExitSourceMode() {
+        if (!announcementSourceMode) return;
+
+        var paragraphs = announcementCollectParagraphs();
+        announcementPopulateParagraphs(paragraphs);
+        announcementContent.style.display = 'block';
+        announcementSource.style.display = 'none';
+        announcementSourceToggle.textContent = '\u003C/\u003E Source';
+        announcementSourceMode = false;
+    }
+
+    if (announcementContent) {
+        announcementContent.addEventListener('input', markAnnouncementDirty);
+    }
+
+    window.addEventListener('beforeunload', function (e) {
+        if (announcementUnsaved) {
+            e.preventDefault();
+            e.returnValue = '';
+        }
+    });
+
+    var announcementBoldBtn = document.getElementById('sw-announcement-bold');
+    if (announcementBoldBtn) {
+        announcementBoldBtn.addEventListener('click', function () {
+            document.execCommand('bold', false, null);
+            announcementContent.focus();
+            markAnnouncementDirty();
+        });
+    }
+
+    var announcementItalicBtn = document.getElementById('sw-announcement-italic');
+    if (announcementItalicBtn) {
+        announcementItalicBtn.addEventListener('click', function () {
+            document.execCommand('italic', false, null);
+            announcementContent.focus();
+            markAnnouncementDirty();
+        });
+    }
+
+    if (announcementAddParaBtn) {
+        announcementAddParaBtn.addEventListener('click', function () {
+            if (announcementSourceMode) return;
+            var newPara = document.createElement('p');
+            newPara.className = 'sw-para';
+            newPara.setAttribute('contenteditable', 'true');
+            announcementContent.appendChild(newPara);
+            newPara.focus();
+            markAnnouncementDirty();
+        });
+    }
+
+    if (announcementSourceToggle && announcementSource && announcementContent) {
+        announcementSourceToggle.addEventListener('click', function () {
+            announcementSourceMode = !announcementSourceMode;
+
+            if (announcementSourceMode) {
+                var paragraphs = announcementContent.querySelectorAll('.sw-para');
+                var html = '';
+                paragraphs.forEach(function (p) {
+                    html += p.innerHTML + '\n\n';
+                });
+                announcementSource.value = html.trim();
+                announcementContent.style.display = 'none';
+                announcementSource.style.display = 'block';
+                announcementSourceToggle.textContent = '🔤 Visual';
+                announcementSource.focus();
+            } else {
+                announcementExitSourceMode();
+                announcementContent.focus();
+            }
+
+            markAnnouncementDirty();
+        });
+    }
+
+    if (announcementCancelBtn) {
+        announcementCancelBtn.addEventListener('click', function () {
+            if (announcementUnsaved && !confirm('You have unsaved announcement changes. Discard them?')) {
+                return;
+            }
+
+            announcementSourceMode = false;
+            announcementPopulateParagraphs(announcementOriginal);
+            announcementContent.style.display = 'block';
+            announcementSource.style.display = 'none';
+            announcementSource.value = '';
+            if (announcementSourceToggle) {
+                announcementSourceToggle.textContent = '\u003C/\u003E Source';
+            }
+            if (announcementHiddenInput) {
+                announcementHiddenInput.value = JSON.stringify(announcementOriginal);
+            }
+            announcementUnsaved = false;
+            setAnnouncementStatus('');
+            if (announcementDetails && announcementOriginal.length > 0) {
+                announcementDetails.open = false;
+            }
+        });
+    }
+
+    if (announcementForm) {
+        announcementForm.addEventListener('submit', function () {
+            if (announcementHiddenInput) {
+                announcementHiddenInput.value = JSON.stringify(announcementCollectParagraphs());
+            }
+            announcementUnsaved = false;
+            if (announcementSaveBtn) {
+                announcementSaveBtn.disabled = true;
+            }
+            setAnnouncementStatus('Saving…');
+        });
+    }
+
+    }  // end if (announcementEditor)
 
     /* ================================================================
      * Story theme picker

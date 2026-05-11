@@ -606,6 +606,166 @@ function data_path(string $file = ''): string
     return $path;
 }
 
+/**
+ * Read shared site content stored in _data/site_content.json.
+ *
+ * @return array{announcement: string, announcement_paragraphs: array<int, string>}
+ */
+function site_content_read(): array
+{
+    $data = json_read(data_path('site_content.json'), [
+        'announcement' => '',
+        'announcement_paragraphs' => [],
+    ]);
+
+    $paragraphs = [];
+    foreach (($data['announcement_paragraphs'] ?? []) as $paragraph) {
+        if (!is_string($paragraph)) {
+            continue;
+        }
+
+        $paragraph = trim($paragraph);
+        if ($paragraph !== '') {
+            $paragraphs[] = $paragraph;
+        }
+    }
+
+    return [
+        'announcement' => (string) ($data['announcement'] ?? ''),
+        'announcement_paragraphs' => $paragraphs,
+    ];
+}
+
+/**
+ * Persist shared site content.
+ *
+ * @param array{announcement?: string, announcement_paragraphs?: array<int, string>} $data
+ */
+function site_content_write(array $data): void
+{
+    $current = site_content_read();
+    $merged = array_merge($current, $data);
+
+    $paragraphs = [];
+    foreach (($merged['announcement_paragraphs'] ?? []) as $paragraph) {
+        if (!is_string($paragraph)) {
+            continue;
+        }
+
+        $paragraph = trim($paragraph);
+        if ($paragraph !== '') {
+            $paragraphs[] = $paragraph;
+        }
+    }
+
+    json_write(data_path('site_content.json'), [
+        'announcement' => (string) ($merged['announcement'] ?? ''),
+        'announcement_paragraphs' => $paragraphs,
+    ]);
+}
+
+/**
+ * Return the current homepage announcement paragraphs as sanitized HTML fragments.
+ */
+function site_announcement_paragraphs(): array
+{
+    $content = site_content_read();
+    $paragraphs = $content['announcement_paragraphs'] ?? [];
+    if (!empty($paragraphs)) {
+        return $paragraphs;
+    }
+
+    $legacy = trim((string) ($content['announcement'] ?? ''));
+    if ($legacy === '') {
+        return [];
+    }
+
+    $blocks = preg_split('/\R{2,}/u', $legacy) ?: [$legacy];
+    $paragraphs = [];
+    foreach ($blocks as $block) {
+        $block = trim($block);
+        if ($block === '') {
+            continue;
+        }
+
+        $paragraphs[] = nl2br(h($block), false);
+    }
+
+    return $paragraphs;
+}
+
+/**
+ * Return the current homepage announcement HTML.
+ */
+function site_announcement_html(): string
+{
+    $html = '';
+    foreach (site_announcement_paragraphs() as $paragraph) {
+        $html .= '<p class="sw-para">' . $paragraph . "</p>\n";
+    }
+
+    return trim($html);
+}
+
+/**
+ * Return the current homepage announcement text.
+ */
+function site_announcement_text(): string
+{
+    $paragraphs = site_announcement_paragraphs();
+    if (empty($paragraphs)) {
+        return trim((string) (site_content_read()['announcement'] ?? ''));
+    }
+
+    $parts = [];
+    foreach ($paragraphs as $paragraph) {
+        $text = str_ireplace(['<br />', '<br/>', '<br>'], "\n", $paragraph);
+        $text = html_entity_decode(strip_tags($text), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $text = trim($text);
+        if ($text !== '') {
+            $parts[] = $text;
+        }
+    }
+
+    return trim(implode("\n\n", $parts));
+}
+
+/**
+ * Save the homepage announcement text.
+ */
+function site_announcement_save(string $text): void
+{
+    site_content_write([
+        'announcement' => trim(mb_substr($text, 0, 4000)),
+        'announcement_paragraphs' => [],
+    ]);
+}
+
+/**
+ * Save the homepage announcement as sanitized rich-text paragraphs.
+ *
+ * @param array<int, string> $paragraphs
+ */
+function site_announcement_save_paragraphs(array $paragraphs): void
+{
+    $clean = [];
+    foreach ($paragraphs as $paragraph) {
+        if (!is_string($paragraph)) {
+            continue;
+        }
+
+        $paragraph = trim($paragraph);
+        if ($paragraph !== '') {
+            $clean[] = $paragraph;
+        }
+    }
+
+    site_content_write([
+        'announcement' => '',
+        'announcement_paragraphs' => $clean,
+    ]);
+}
+
 /* ------------------------------------------------------------------
  * Theme Helpers
  * ----------------------------------------------------------------*/

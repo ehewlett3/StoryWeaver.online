@@ -43,6 +43,8 @@ if ($user) {
     $is_editor = (role_level($user['role']) >= role_level('editor'));
     $can_edit = $is_author || $is_editor;
 }
+$can_jump_latest = $user !== null && (($user['role'] ?? '') === 'admin');
+$latest_node_id = $can_jump_latest ? story_find_latest_node($story_id, true) : null;
 
 // Quarantine notice
 $is_quarantined = ($node['location'] === 'quarantine');
@@ -144,6 +146,10 @@ if ($user && $is_root_node) {
             <?php if ($can_edit): ?>
                 <a href="<?= h(edit_url($story_id, $node_id)) ?>"
                    class="sw-btn sw-btn-sm sw-btn-secondary">✏️ Edit</a>
+            <?php endif; ?>
+            <?php if ($can_jump_latest && $latest_node_id !== null && $latest_node_id !== $node_id): ?>
+                <a href="<?= h(node_url($story_id, $latest_node_id)) ?>"
+                   class="sw-btn sw-btn-sm sw-btn-secondary">🕒 Latest Page</a>
             <?php endif; ?>
             <?php if ($can_flag): ?>
                 <a href="<?= h(api_url('flag_concern', ['node' => $node_id])) ?>"
@@ -340,18 +346,9 @@ if ($user && $is_root_node) {
                 <h2>What do you do?</h2>
                 <ul>
                     <?php foreach ($node['choices'] as $choice): ?>
+                        <?php if (!empty($choice['quarantined'])) continue; ?>
                         <li>
-                            <?php if (!empty($choice['quarantined'])): ?>
-                                <?php if ($can_access_quarantine_story): ?>
-                                    <?php $child_id = basename($choice['node'], '.html'); ?>
-                                    <a href="<?= h(node_url($story_id, $child_id)) ?>"
-                                       class="sw-choice-quarantined">
-                                        <?= h($choice['text']) ?> <span class="sw-text-muted">[quarantined]</span>
-                                    </a>
-                                <?php else: ?>
-                                    <span class="sw-text-muted"><?= h($choice['text']) ?> [unavailable]</span>
-                                <?php endif; ?>
-                            <?php elseif ($choice['node'] !== null): ?>
+                            <?php if ($choice['node'] !== null): ?>
                                 <?php
                                 $child_id = basename($choice['node'], '.html');
                                 ?>

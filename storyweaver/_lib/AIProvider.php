@@ -16,7 +16,7 @@ class AIProvider
     private array $key;
 
     /** @var int Request timeout in seconds. */
-    private int $timeout = 60;
+    private int $timeout = 75;
 
     /**
      * Create an AIProvider for a specific key configuration.
@@ -42,6 +42,7 @@ class AIProvider
 
         return match ($provider) {
             'anthropic' => $this->callAnthropic($system_prompt, $user_message),
+            'gemini'    => $this->callGemini($system_prompt, $user_message),
             default     => $this->callOpenAICompatible($system_prompt, $user_message),
         };
     }
@@ -61,6 +62,7 @@ class AIProvider
 
         return match ($provider) {
             'anthropic' => $this->streamAnthropic($system_prompt, $user_message, $onChunk),
+            'gemini'    => $this->streamGemini($system_prompt, $user_message, $onChunk),
             default     => $this->streamOpenAICompatible($system_prompt, $user_message, $onChunk),
         };
     }
@@ -102,6 +104,7 @@ class AIProvider
 
         $models = match ($provider) {
             'anthropic' => $this->listAnthropicModels(),
+            'gemini'    => $this->listGeminiModels(),
             'ollama'    => $this->listOllamaModels(),
             default     => $this->listOpenAICompatibleModels(),
         };
@@ -130,28 +133,8 @@ class AIProvider
         $base_url = rtrim($this->key['base_url'] ?? '', '/');
         $url = $base_url . '/chat/completions';
 
-        $body = [
-            'model'    => $this->key['model_text'] ?? 'gpt-4o',
-            'messages' => [
-                ['role' => 'system', 'content' => $system],
-                ['role' => 'user',   'content' => $user],
-            ],
-            'temperature' => 0.8,
-        ];
-
-        $headers = [
-            'Content-Type: application/json',
-        ];
-
-        $api_key = $this->key['api_key'] ?? '';
-        if ($api_key !== '') {
-            $headers[] = 'Authorization: Bearer ' . $api_key;
-        }
-
-        // Suppress thinking for Ollama (models that don't support it ignore this flag)
-        if (($this->key['provider'] ?? '') === 'ollama') {
-            $body['think'] = false;
-        }
+        $body = $this->buildOpenAICompatibleBody($system, $user);
+        $headers = $this->openAICompatibleHeaders();
 
         $raw = $this->httpPost($url, $body, $headers);
         $data = json_decode($raw, true);
@@ -169,6 +152,54 @@ class AIProvider
         $text = $data['choices'][0]['message']['content'] ?? null;
         if ($text === null) {
             throw new RuntimeException('No content in provider response.');
+        }
+
+        return trim(self::stripThinkingTags($text));
+    }
+
+    /**
+     * Call the Gemini Generative Language API.
+     */
+    private function callGemini(string $system, string $user): string
+    {
+        $base_url = rtrim($this->key['base_url'] ?? '', '/');
+        $model_path = $this->geminiModelPath((string) ($this->key['model_text'] ?? 'gemini-2.5-flash'));
+        $url = $base_url . '/' . $model_path . ':generateContent?key=' . rawurlencode((string) ($this->key['api_key'] ?? ''));
+
+        $body = [
+            'systemInstruction' => [
+                'parts' => [
+                    ['text' => $system],
+                ],
+            ],
+            'contents' => [[
+                'role' => 'user',
+                'parts' => [
+                    ['text' => $user],
+                ],
+            ]],
+            'generationConfig' => [
+                'temperature' => 0.8,
+            ],
+        ];
+
+        try {
+            $raw = $this->httpPost($url, $body, ['Content-Type: application/json']);
+        } catch (RuntimeException $e) {
+            throw new RuntimeException($this->normalizeGeminiTransportError($e->getMessage()), 0, $e);
+        }
+        $data = json_decode($raw, true);
+        if (!is_array($data)) {
+            throw new RuntimeException('Invalid JSON response from Gemini.');
+        }
+
+        if (isset($data['error'])) {
+            throw new RuntimeException($this->formatGeminiError($data['error']));
+        }
+
+        $text = $this->extractGeminiText($data);
+        if ($text === '') {
+            throw new RuntimeException('No text content in Gemini response.');
         }
 
         return trim(self::stripThinkingTags($text));
@@ -248,26 +279,8 @@ class AIProvider
         $base_url = rtrim($this->key['base_url'] ?? '', '/');
         $url = $base_url . '/chat/completions';
 
-        $body = [
-            'model'       => $this->key['model_text'] ?? 'gpt-4o',
-            'messages'    => [
-                ['role' => 'system', 'content' => $system],
-                ['role' => 'user',   'content' => $user],
-            ],
-            'temperature' => 0.8,
-            'stream'      => true,
-        ];
-
-        $headers = ['Content-Type: application/json'];
-        $api_key = $this->key['api_key'] ?? '';
-        if ($api_key !== '') {
-            $headers[] = 'Authorization: Bearer ' . $api_key;
-        }
-
-        // Suppress thinking for Ollama (models that don't support it ignore this flag)
-        if (($this->key['provider'] ?? '') === 'ollama') {
-            $body['think'] = false;
-        }
+        $body = $this->buildOpenAICompatibleBody($system, $user, true);
+        $headers = $this->openAICompatibleHeaders();
 
         $accumulated = '';
         // Track state for stripping <think>…</think> blocks from the stream
@@ -321,6 +334,33 @@ class AIProvider
         // Strip any thinking tags that weren't already filtered during streaming
         // (e.g. tags split across chunk boundaries)
         return self::stripThinkingTags($accumulated);
+    }
+
+    /**
+     * Stream Gemini text by chunking a completed response.
+     */
+    private function streamGemini(string $system, string $user, callable $onChunk): string
+    {
+        $text = $this->callGemini($system, $user);
+        $words = preg_split('/(\s+)/u', $text, -1, PREG_SPLIT_DELIM_CAPTURE | PREG_SPLIT_NO_EMPTY);
+        if (!is_array($words)) {
+            $words = [$text];
+        }
+
+        $chunk = '';
+        foreach ($words as $part) {
+            if ($chunk !== '' && mb_strlen($chunk . $part) > 120) {
+                $onChunk($chunk);
+                $chunk = '';
+            }
+            $chunk .= $part;
+        }
+
+        if ($chunk !== '') {
+            $onChunk($chunk);
+        }
+
+        return $text;
     }
 
     /**
@@ -659,6 +699,9 @@ class AIProvider
         if ($provider === 'anthropic') {
             throw new RuntimeException('Anthropic does not support image generation.');
         }
+        if ($provider === 'gemini') {
+            throw new RuntimeException('Gemini image generation is not supported by this StoryWeaver integration yet.');
+        }
 
         // Image generation can be slow — use extended timeout
         $saved_timeout = $this->timeout;
@@ -801,11 +844,7 @@ class AIProvider
     {
         $base_url = rtrim((string) ($this->key['base_url'] ?? ''), '/');
         $url = $base_url . '/models';
-        $headers = ['Content-Type: application/json'];
-        $api_key = $this->key['api_key'] ?? '';
-        if ($api_key !== '') {
-            $headers[] = 'Authorization: Bearer ' . $api_key;
-        }
+        $headers = $this->openAICompatibleHeaders();
 
         $raw = $this->httpGet($url, $headers);
         $data = json_decode($raw, true);
@@ -816,6 +855,49 @@ class AIProvider
         $models = [];
         foreach (($data['data'] ?? []) as $item) {
             $id = trim((string) ($item['id'] ?? $item['name'] ?? ''));
+            if ($id !== '') {
+                $models[] = $id;
+            }
+        }
+
+        return $models;
+    }
+
+    /**
+     * List models from Gemini's /models endpoint.
+     *
+     * @return array<int, string>
+     */
+    private function listGeminiModels(): array
+    {
+        $base_url = rtrim((string) ($this->key['base_url'] ?? ''), '/');
+        $url = $base_url . '/models?key=' . rawurlencode((string) ($this->key['api_key'] ?? ''));
+
+        try {
+            $raw = $this->httpGet($url, ['Content-Type: application/json']);
+        } catch (RuntimeException $e) {
+            throw new RuntimeException($this->normalizeGeminiTransportError($e->getMessage()), 0, $e);
+        }
+        $data = json_decode($raw, true);
+        if (!is_array($data)) {
+            throw new RuntimeException('Invalid JSON response from Gemini.');
+        }
+
+        if (isset($data['error'])) {
+            throw new RuntimeException($this->formatGeminiError($data['error']));
+        }
+
+        $models = [];
+        foreach (($data['models'] ?? []) as $item) {
+            $methods = $item['supportedGenerationMethods'] ?? [];
+            if (is_array($methods) && !in_array('generateContent', $methods, true)) {
+                continue;
+            }
+
+            $id = trim((string) ($item['name'] ?? ''));
+            if (str_starts_with($id, 'models/')) {
+                $id = substr($id, 7);
+            }
             if ($id !== '') {
                 $models[] = $id;
             }
@@ -936,5 +1018,133 @@ class AIProvider
         }
 
         return $response;
+    }
+
+    /**
+     * Build a common OpenAI-compatible request body.
+     */
+    private function buildOpenAICompatibleBody(string $system, string $user, bool $stream = false): array
+    {
+        $body = [
+            'model' => $this->key['model_text'] ?? 'gpt-4o',
+            'messages' => [
+                ['role' => 'system', 'content' => $system],
+                ['role' => 'user', 'content' => $user],
+            ],
+        ];
+
+        if ($this->openAICompatibleSupportsCustomTemperature()) {
+            $body['temperature'] = 0.8;
+        }
+        if ($stream) {
+            $body['stream'] = true;
+        }
+        if (($this->key['provider'] ?? '') === 'ollama') {
+            $body['think'] = false;
+        }
+
+        return $body;
+    }
+
+    /**
+     * Build common OpenAI-compatible headers.
+     *
+     * Adds the recommended OpenRouter attribution headers when applicable.
+     *
+     * @return array<int, string>
+     */
+    private function openAICompatibleHeaders(): array
+    {
+        $headers = ['Content-Type: application/json'];
+        $api_key = (string) ($this->key['api_key'] ?? '');
+        if ($api_key !== '') {
+            $headers[] = 'Authorization: Bearer ' . $api_key;
+        }
+
+        $host = strtolower((string) (parse_url((string) ($this->key['base_url'] ?? ''), PHP_URL_HOST) ?? ''));
+        if ($host !== '' && str_contains($host, 'openrouter.ai')) {
+            $headers[] = 'HTTP-Referer: ' . request_origin() . base_url() . '/';
+            $headers[] = 'X-Title: StoryWeaver';
+        }
+
+        return $headers;
+    }
+
+    /**
+     * Some OpenAI-compatible model families reject custom temperature values.
+     */
+    private function openAICompatibleSupportsCustomTemperature(): bool
+    {
+        $model = strtolower((string) ($this->key['model_text'] ?? ''));
+        return $model === '' || !str_contains($model, 'gpt-5');
+    }
+
+    /**
+     * Normalize a Gemini model name for URL use.
+     */
+    private function geminiModelPath(string $model): string
+    {
+        $model = trim($model);
+        if ($model === '') {
+            $model = 'gemini-2.5-flash';
+        }
+        return str_starts_with($model, 'models/') ? $model : 'models/' . $model;
+    }
+
+    /**
+     * Extract plain text from a Gemini response payload.
+     */
+    private function extractGeminiText(array $data): string
+    {
+        $text = '';
+        foreach (($data['candidates'] ?? []) as $candidate) {
+            foreach (($candidate['content']['parts'] ?? []) as $part) {
+                $text .= (string) ($part['text'] ?? '');
+            }
+        }
+
+        return $text;
+    }
+
+    /**
+     * Convert Gemini API errors into clearer user-facing guidance.
+     *
+     * @param mixed $error
+     */
+    private function formatGeminiError($error): string
+    {
+        if (!is_array($error)) {
+            return 'Gemini error: ' . trim((string) $error);
+        }
+
+        $code = (int) ($error['code'] ?? 0);
+        $status = strtoupper(trim((string) ($error['status'] ?? '')));
+        $message = trim((string) ($error['message'] ?? 'Unknown Gemini error'));
+        $hint = '';
+
+        if ($code === 429 || $status === 'RESOURCE_EXHAUSTED') {
+            $hint = ' Free Google AI Studio keys are often quota-limited; try a supported Gemini text model, wait for quota reset, or use a paid key/project.';
+        } elseif ($code === 403 || $status === 'PERMISSION_DENIED') {
+            $hint = ' This key or project may not have access to that Gemini model or API in the current region.';
+        } elseif ($code === 400 || $status === 'FAILED_PRECONDITION') {
+            $hint = ' Check that the selected model supports generateContent for your AI Studio key and current API version.';
+        }
+
+        return 'Gemini error: ' . $message . $hint;
+    }
+
+    /**
+     * Extract a structured Gemini error from a transport-layer exception message.
+     */
+    private function normalizeGeminiTransportError(string $message): string
+    {
+        if (preg_match('/(\{.*"error".*\})/s', $message, $matches)) {
+            $payload = json_decode($matches[1], true);
+            if (is_array($payload) && isset($payload['error'])) {
+                return $this->formatGeminiError($payload['error']);
+            }
+        }
+
+        return $message;
     }
 }

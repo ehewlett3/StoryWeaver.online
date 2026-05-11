@@ -177,6 +177,7 @@ $available_fallback_keys = array_values(array_filter($all_keys, function ($k) us
                         <select id="key-provider" class="sw-input">
                             <option value="openai">OpenAI</option>
                             <option value="anthropic">Anthropic</option>
+                            <option value="gemini">Google Gemini</option>
                             <option value="ollama">Ollama (local)</option>
                             <option value="custom">Custom (OpenAI-compatible)</option>
                         </select>

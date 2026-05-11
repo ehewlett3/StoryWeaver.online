@@ -118,6 +118,60 @@ function story_get_title(string $story_id): string
 }
 
 /**
+ * Find the most recently added node in a story.
+ *
+ * Falls back to file modification time when a node lacks a parseable timestamp.
+ *
+ * @param string $story_id Story ID.
+ * @param bool   $include_quarantine Whether to include quarantined nodes.
+ * @return string|null Latest node ID, or null if none were found.
+ */
+function story_find_latest_node(string $story_id, bool $include_quarantine = false): ?string
+{
+    $dirs = [STORIES_DIR . '/' . $story_id];
+    if ($include_quarantine) {
+        $dirs[] = QUARANTINE_DIR . '/' . $story_id;
+    }
+
+    $latest_id = null;
+    $latest_sort = PHP_INT_MIN;
+    $latest_mtime = PHP_INT_MIN;
+
+    foreach ($dirs as $story_dir) {
+        if (!is_dir($story_dir)) {
+            continue;
+        }
+
+        $location = str_starts_with($story_dir, QUARANTINE_DIR) ? 'quarantine' : 'stories';
+        foreach (glob($story_dir . '/node_*.html') as $file) {
+            $html = file_get_contents($file);
+            if ($html === false) {
+                continue;
+            }
+
+            $node = node_parse_html($html, $location);
+            $node_id = basename($file, '.html');
+            $created_at = strtotime((string) ($node['created_at'] ?? ''));
+            $mtime = filemtime($file);
+            $mtime = $mtime === false ? 0 : $mtime;
+            $sort_value = $created_at !== false ? $created_at : $mtime;
+
+            if (
+                $latest_id === null
+                || $sort_value > $latest_sort
+                || ($sort_value === $latest_sort && $mtime > $latest_mtime)
+            ) {
+                $latest_id = $node_id;
+                $latest_sort = $sort_value;
+                $latest_mtime = $mtime;
+            }
+        }
+    }
+
+    return $latest_id;
+}
+
+/**
  * Append a history entry to an sw_meta array.
  */
 function node_meta_append_history(array $meta, string $user_id, string $action, string $ai_model = ''): array

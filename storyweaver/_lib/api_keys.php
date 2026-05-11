@@ -612,7 +612,7 @@ function api_key_mark_unavailable(string $id, string $reason = ''): bool
  */
 function api_key_valid_provider(string $provider): bool
 {
-    return in_array($provider, ['openai', 'anthropic', 'ollama', 'custom'], true);
+    return in_array($provider, ['openai', 'anthropic', 'gemini', 'ollama', 'custom'], true);
 }
 
 /**
@@ -626,6 +626,7 @@ function api_key_default_base_url(string $provider): string
     return match ($provider) {
         'openai'    => 'https://api.openai.com/v1',
         'anthropic' => 'https://api.anthropic.com',
+        'gemini'    => 'https://generativelanguage.googleapis.com/v1beta',
         'ollama'    => 'http://localhost:11434/v1',
         default     => '',
     };

@@ -111,6 +111,10 @@ body {
     color: rgba(255, 244, 214, 0.9);
 }
 
+.sw-auth-card .sw-form-group label {
+    color: #fff6de;
+}
+
 .sw-auth-card h1 {
     color: #f2df9d;
     text-shadow: 0 2px 12px rgba(76, 175, 80, 0.3);
