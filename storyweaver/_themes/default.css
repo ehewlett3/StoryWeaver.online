@@ -729,6 +729,30 @@ textarea.sw-theme-editor {
     margin-bottom: 1.5rem;
 }
 
+.sw-announcement-panel summary {
+    cursor: pointer;
+    list-style: none;
+}
+
+.sw-announcement-panel summary::-webkit-details-marker {
+    display: none;
+}
+
+.sw-announcement-panel-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-bottom: 0;
+}
+
+.sw-announcement-panel[open] .sw-announcement-panel-title {
+    margin-bottom: 1rem;
+}
+
+.sw-announcement-panel-body {
+    padding-top: 0.25rem;
+}
+
 .sw-announcement-content {
     line-height: 1.7;
 }
@@ -1314,6 +1338,16 @@ textarea.sw-theme-editor {
 
 .sw-settings-section {
     max-width: 700px;
+}
+
+.sw-settings-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+}
+
+.sw-settings-inline-form {
+    margin-top: 0.85rem;
 }
 
 .sw-key-list {

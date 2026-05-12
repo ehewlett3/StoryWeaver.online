@@ -15,17 +15,22 @@ class AIProvider
     /** @var array The API key record from api_keys.json. */
     private array $key;
 
+    /** @var array<string, float|int> */
+    private array $generationOptions;
+
     /** @var int Request timeout in seconds. */
     private int $timeout = 75;
 
     /**
      * Create an AIProvider for a specific key configuration.
      *
-     * @param array $key A key record from api_keys.json.
+     * @param array $key               A key record from api_keys.json.
+     * @param array $generationOptions User-configurable generation controls.
      */
-    public function __construct(array $key)
+    public function __construct(array $key, array $generationOptions = [])
     {
         $this->key = $key;
+        $this->generationOptions = $this->normalizeGenerationOptions($generationOptions);
     }
 
     /**
@@ -166,6 +171,12 @@ class AIProvider
         $model_path = $this->geminiModelPath((string) ($this->key['model_text'] ?? 'gemini-2.5-flash'));
         $url = $base_url . '/' . $model_path . ':generateContent?key=' . rawurlencode((string) ($this->key['api_key'] ?? ''));
 
+        $generation_config = [
+            'temperature'     => $this->generationFloat('temperature', 0.8),
+            'topP'            => $this->generationFloat('top_p', 1.0),
+            'maxOutputTokens' => $this->generationInt('max_tokens', 2048),
+        ];
+
         $body = [
             'systemInstruction' => [
                 'parts' => [
@@ -178,9 +189,7 @@ class AIProvider
                     ['text' => $user],
                 ],
             ]],
-            'generationConfig' => [
-                'temperature' => 0.8,
-            ],
+            'generationConfig' => $generation_config,
         ];
 
         try {
@@ -220,12 +229,15 @@ class AIProvider
 
         $body = [
             'model'      => $this->key['model_text'] ?? 'claude-sonnet-4-20250514',
-            'max_tokens' => 2048,
+            'max_tokens' => $this->generationInt('max_tokens', 2048),
             'system'     => $system,
             'messages'   => [
                 ['role' => 'user', 'content' => $user],
             ],
         ];
+
+        $body['temperature'] = $this->generationFloat('temperature', 0.8);
+        $body['top_p'] = $this->generationFloat('top_p', 1.0);
 
         $headers = [
             'Content-Type: application/json',
@@ -379,11 +391,14 @@ class AIProvider
 
         $body = [
             'model'      => $this->key['model_text'] ?? 'claude-sonnet-4-20250514',
-            'max_tokens' => 2048,
+            'max_tokens' => $this->generationInt('max_tokens', 2048),
             'system'     => $system,
             'messages'   => [['role' => 'user', 'content' => $user]],
             'stream'     => true,
         ];
+
+        $body['temperature'] = $this->generationFloat('temperature', 0.8);
+        $body['top_p'] = $this->generationFloat('top_p', 1.0);
 
         $headers = [
             'Content-Type: application/json',
@@ -1034,7 +1049,11 @@ class AIProvider
         ];
 
         if ($this->openAICompatibleSupportsCustomTemperature()) {
-            $body['temperature'] = 0.8;
+            $body['temperature'] = $this->generationFloat('temperature', 0.8);
+            $body['top_p'] = $this->generationFloat('top_p', 1.0);
+        }
+        if ($this->openAICompatibleSupportsMaxTokens()) {
+            $body['max_tokens'] = $this->generationInt('max_tokens', 2048);
         }
         if ($stream) {
             $body['stream'] = true;
@@ -1077,6 +1096,86 @@ class AIProvider
     {
         $model = strtolower((string) ($this->key['model_text'] ?? ''));
         return $model === '' || !str_contains($model, 'gpt-5');
+    }
+
+    /**
+     * Some OpenAI-compatible model families reject custom token limits too.
+     */
+    private function openAICompatibleSupportsMaxTokens(): bool
+    {
+        $model = strtolower((string) ($this->key['model_text'] ?? ''));
+        return $model === '' || !str_contains($model, 'gpt-5');
+    }
+
+    /**
+     * Normalize user-provided generation controls.
+     *
+     * @param array<string, mixed> $options
+     * @return array<string, float|int>
+     */
+    private function normalizeGenerationOptions(array $options): array
+    {
+        return [
+            'temperature' => $this->clampFloat($options['temperature'] ?? 0.8, 0.0, 2.0, 0.8),
+            'top_p'       => $this->clampFloat($options['top_p'] ?? 1.0, 0.0, 1.0, 1.0),
+            'max_tokens'  => $this->clampInt($options['max_tokens'] ?? 2048, 128, 8192, 2048),
+        ];
+    }
+
+    /**
+     * Read a normalized float generation option.
+     */
+    private function generationFloat(string $key, float $default): float
+    {
+        $value = $this->generationOptions[$key] ?? $default;
+        return is_numeric($value) ? (float) $value : $default;
+    }
+
+    /**
+     * Read a normalized integer generation option.
+     */
+    private function generationInt(string $key, int $default): int
+    {
+        $value = $this->generationOptions[$key] ?? $default;
+        return is_numeric($value) ? (int) round((float) $value) : $default;
+    }
+
+    /**
+     * Clamp a float option.
+     */
+    private function clampFloat(mixed $value, float $min, float $max, float $default): float
+    {
+        if (!is_numeric($value)) {
+            return $default;
+        }
+
+        $value = (float) $value;
+        if ($value < $min) {
+            $value = $min;
+        } elseif ($value > $max) {
+            $value = $max;
+        }
+
+        return round($value, 2);
+    }
+
+    /**
+     * Clamp an integer option.
+     */
+    private function clampInt(mixed $value, int $min, int $max, int $default): int
+    {
+        if (!is_numeric($value)) {
+            return $default;
+        }
+
+        $value = (int) round((float) $value);
+        if ($value < $min) {
+            $value = $min;
+        } elseif ($value > $max) {
+            $value = $max;
+        }
+
+        return $value;
     }
 
     /**

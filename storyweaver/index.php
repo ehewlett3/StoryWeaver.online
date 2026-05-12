@@ -248,71 +248,77 @@ if (is_dir($stories_dir)) {
 
         <?php if ($announcement !== '' || $can_edit_announcement): ?>
             <section class="sw-card sw-announcement-card">
-                <h2 class="sw-card-title">Announcement</h2>
-                <?php if ($announcement_html !== ''): ?>
-                    <div class="sw-announcement-content"><?= $announcement_html ?></div>
-                <?php elseif (!$can_edit_announcement): ?>
-                    <p class="sw-text-muted">No announcement at the moment.</p>
-                <?php endif; ?>
+                <details id="sw-announcement-panel" class="sw-announcement-panel" open>
+                    <summary>
+                        <span class="sw-card-title sw-announcement-panel-title">News and Announcements</span>
+                    </summary>
+                    <div class="sw-announcement-panel-body">
+                        <?php if ($announcement_html !== ''): ?>
+                            <div class="sw-announcement-content"><?= $announcement_html ?></div>
+                        <?php elseif (!$can_edit_announcement): ?>
+                            <p class="sw-text-muted">No announcement at the moment.</p>
+                        <?php endif; ?>
 
-                <?php if ($can_edit_announcement): ?>
-                    <details class="sw-announcement-editor" id="sw-announcement-details" <?= $announcement === '' ? 'open' : '' ?>>
-                        <summary><?= $announcement === '' ? 'Add announcement' : 'Edit announcement' ?></summary>
-                        <form method="POST" action="<?= h(app_url('index')) ?>" class="sw-form">
-                            <?= csrf_field() ?>
-                            <input type="hidden" name="form_action" value="save_announcement">
-                            <input type="hidden" id="sw-announcement-paragraphs-input" name="announcement_paragraphs" value="<?= h($announcement_editor_json) ?>">
-                            <div class="sw-form-group" style="margin-top:0.75rem;">
-                                <label>Homepage announcement</label>
-                                <div id="sw-announcement-editor"
-                                     class="sw-announcement-rich-editor"
-                                     data-original-paragraphs="<?= h($announcement_editor_json) ?>">
-                                    <div id="sw-announcement-toolbar" class="sw-editor-toolbar">
-                                        <button type="button" id="sw-announcement-bold" class="sw-btn sw-btn-secondary sw-btn-sm"
-                                                title="Bold (Ctrl+B)"><strong>B</strong></button>
-                                        <button type="button" id="sw-announcement-italic" class="sw-btn sw-btn-secondary sw-btn-sm"
-                                                title="Italic (Ctrl+I)"><em>I</em></button>
+                        <?php if ($can_edit_announcement): ?>
+                            <details class="sw-announcement-editor" id="sw-announcement-details" <?= $announcement === '' ? 'open' : '' ?>>
+                                <summary><?= $announcement === '' ? 'Add announcement' : 'Edit announcement' ?></summary>
+                                <form method="POST" action="<?= h(app_url('index')) ?>" class="sw-form">
+                                    <?= csrf_field() ?>
+                                    <input type="hidden" name="form_action" value="save_announcement">
+                                    <input type="hidden" id="sw-announcement-paragraphs-input" name="announcement_paragraphs" value="<?= h($announcement_editor_json) ?>">
+                                    <div class="sw-form-group" style="margin-top:0.75rem;">
+                                        <label>Homepage announcement</label>
+                                        <div id="sw-announcement-editor"
+                                             class="sw-announcement-rich-editor"
+                                             data-original-paragraphs="<?= h($announcement_editor_json) ?>">
+                                            <div id="sw-announcement-toolbar" class="sw-editor-toolbar">
+                                                <button type="button" id="sw-announcement-bold" class="sw-btn sw-btn-secondary sw-btn-sm"
+                                                        title="Bold (Ctrl+B)"><strong>B</strong></button>
+                                                <button type="button" id="sw-announcement-italic" class="sw-btn sw-btn-secondary sw-btn-sm"
+                                                        title="Italic (Ctrl+I)"><em>I</em></button>
 
-                                        <div class="sw-editor-toolbar-separator"></div>
+                                                <div class="sw-editor-toolbar-separator"></div>
 
-                                        <button type="button" id="sw-announcement-add-para" class="sw-btn sw-btn-secondary sw-btn-sm"
-                                                title="Add paragraph">+ ¶</button>
-                                        <button type="button" id="sw-announcement-source-toggle" class="sw-btn sw-btn-secondary sw-btn-sm"
-                                                title="Toggle source mode">&lt;/&gt; Source</button>
+                                                <button type="button" id="sw-announcement-add-para" class="sw-btn sw-btn-secondary sw-btn-sm"
+                                                        title="Add paragraph">+ ¶</button>
+                                                <button type="button" id="sw-announcement-source-toggle" class="sw-btn sw-btn-secondary sw-btn-sm"
+                                                        title="Toggle source mode">&lt;/&gt; Source</button>
 
-                                        <div class="sw-editor-toolbar-spacer"></div>
+                                                <div class="sw-editor-toolbar-spacer"></div>
 
-                                        <span id="sw-announcement-editor-status" class="sw-editor-status"></span>
+                                                <span id="sw-announcement-editor-status" class="sw-editor-status"></span>
 
-                                        <div class="sw-editor-toolbar-separator"></div>
+                                                <div class="sw-editor-toolbar-separator"></div>
 
-                                        <button type="button" id="sw-announcement-editor-cancel" class="sw-btn sw-btn-secondary sw-btn-sm">Cancel</button>
-                                        <button type="submit" id="sw-announcement-editor-save" class="sw-btn sw-btn-primary sw-btn-sm">💾 Save</button>
+                                                <button type="button" id="sw-announcement-editor-cancel" class="sw-btn sw-btn-secondary sw-btn-sm">Cancel</button>
+                                                <button type="submit" id="sw-announcement-editor-save" class="sw-btn sw-btn-primary sw-btn-sm">💾 Save</button>
+                                            </div>
+
+                                            <div id="sw-announcement-editor-content" class="sw-editor-content">
+                                                <?php if (!empty($announcement_paragraphs)): ?>
+                                                    <?php foreach ($announcement_paragraphs as $paragraph): ?>
+                                                        <p class="sw-para" contenteditable="true"><?= $paragraph ?></p>
+                                                    <?php endforeach; ?>
+                                                <?php else: ?>
+                                                    <p class="sw-para" contenteditable="true"></p>
+                                                <?php endif; ?>
+                                            </div>
+
+                                            <textarea id="sw-announcement-editor-source" class="sw-editor-source"></textarea>
+                                        </div>
+                                        <noscript>
+                                            <textarea name="announcement"
+                                                      class="sw-input"
+                                                      rows="5"
+                                                      maxlength="4000"
+                                                      placeholder="Share site news, maintenance notes, or featured events."><?= h($announcement) ?></textarea>
+                                        </noscript>
                                     </div>
-
-                                    <div id="sw-announcement-editor-content" class="sw-editor-content">
-                                        <?php if (!empty($announcement_paragraphs)): ?>
-                                            <?php foreach ($announcement_paragraphs as $paragraph): ?>
-                                                <p class="sw-para" contenteditable="true"><?= $paragraph ?></p>
-                                            <?php endforeach; ?>
-                                        <?php else: ?>
-                                            <p class="sw-para" contenteditable="true"></p>
-                                        <?php endif; ?>
-                                    </div>
-
-                                    <textarea id="sw-announcement-editor-source" class="sw-editor-source"></textarea>
-                                </div>
-                                <noscript>
-                                    <textarea name="announcement"
-                                              class="sw-input"
-                                              rows="5"
-                                              maxlength="4000"
-                                              placeholder="Share site news, maintenance notes, or featured events."><?= h($announcement) ?></textarea>
-                                </noscript>
-                            </div>
-                        </form>
-                    </details>
-                <?php endif; ?>
+                                </form>
+                            </details>
+                        <?php endif; ?>
+                    </div>
+                </details>
             </section>
         <?php endif; ?>
 

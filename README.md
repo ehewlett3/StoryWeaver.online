@@ -14,6 +14,8 @@ The repository root intentionally stays minimal: the deployable app is the `stor
 - **Image generation** — Create illustrations for story pages using DALL-E, GPT Image, Flux, or compatible image models
 - **Image management** — Regenerate images with side-by-side comparison, delete unwanted images
 - **Multiple API keys** — Configure multiple AI providers with user-scoped or shared access
+- **Per-user AI tuning** — Logged-in users can edit their story system prompt text and generation controls, while admins manage the shared JSON schema
+- **Homepage news** — Admins can post rich-text news and announcements above the story list
 - **In-place editing** — Rich text editor with visual and source modes for manual content creation
 - **Moderation tools** — Flag pages for concern, quarantine inappropriate content, approve/restore pages
 - **Theming** — Light and dark themes out of the box; admin can edit CSS and set per-story themes
@@ -107,6 +109,19 @@ Set at least one key with **All** scope to enable AI features for guest users.
 
 If multiple **All** keys are active, an admin can choose the **default public key** from **⚙️ Settings → API Keys** so guests and users without their own key use the intended shared provider first.
 
+### AI Prompt & Model Settings
+
+The **⚙️ Settings → AI** tab lets each logged-in user adjust:
+
+- their editable story system-prompt text
+- **temperature**
+- **top_p**
+- **max output tokens**
+
+Those controls are only passed to providers/models that support them. The shared JSON schema is managed separately so users can tune prompt wording without changing the required response format.
+
+Admins can edit the shared story JSON schema and choose whether schema editing stays admin-only or is extended to editors and/or contributors. Both per-user AI settings and the shared schema can be reset to their defaults from the same tab.
+
 ### Theme Management
 
 Admins can manage themes from **Admin Dashboard → Themes**:
@@ -186,7 +201,7 @@ The `AIProvider` class normalizes requests across providers:
 - **Abort controls**: Long-running generation requests can be cancelled from the live overlay instead of waiting for the full timeout
 - **Image generation**: Supports OpenAI image API and Ollama's native generation endpoint
 - **Context reconstruction**: Walks the parent chain to build conversation history, auto-truncates to stay within token limits
-- **Prompt engineering**: Structured prompts that return JSON with paragraphs and choices
+- **Prompt engineering**: Structured prompts that return JSON with paragraphs and choices, with user-editable prompt text and a separately managed shared schema
 
 ### Security
 

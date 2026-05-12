@@ -133,6 +133,14 @@ switch ($action) {
  * ====================================================================*/
 
 /**
+ * Build an AI provider client using the active user's generation settings.
+ */
+function api_ai_provider(array $key_record, ?array $user = null): AIProvider
+{
+    return new AIProvider($key_record, ai_generation_options_for_user($user));
+}
+
+/**
  * Save updated paragraph text for a node.
  *
  * Expects POST JSON body: { story_id, node_id, paragraphs: [string, ...] }
@@ -386,14 +394,14 @@ function handle_generate_node(): void
     }
 
     $prompt_bundle = $is_opening
-        ? build_opening_prompt_bundle($title, $scenario)
-        : build_continuation_prompt_bundle($story_id, $parent_node_id, $choice_text, $check_quarantine);
+        ? build_opening_prompt_bundle($title, $scenario, $user)
+        : build_continuation_prompt_bundle($story_id, $parent_node_id, $choice_text, $check_quarantine, $user);
     $system_prompt = $prompt_bundle['system_prompt'];
     $story_context = $prompt_bundle['story_context'];
 
     // Call AI with retry on parse failure; fall back to fallback_key_id on connection errors
     $active_key = $key_record;
-    $provider   = new AIProvider($active_key);
+    $provider   = api_ai_provider($active_key, $user);
     $parsed     = null;
     $last_error = '';
     $raw_response = '';
@@ -433,7 +441,7 @@ function handle_generate_node(): void
             } catch (RuntimeException $e) {
                 json_error($e->getMessage(), 500);
             }
-            $provider     = new AIProvider($active_key);
+            $provider     = api_ai_provider($active_key, $user);
             $last_error   = '';
             $raw_response = '';
 
@@ -590,19 +598,19 @@ function handle_regenerate_node(): void
         if ($root_scenario === '') {
             $root_scenario = story_get_scenario_essentials($story_id);
         }
-        $prompt_bundle = build_opening_prompt_bundle($node['title'] ?? story_get_title($story_id), $root_scenario);
+        $prompt_bundle = build_opening_prompt_bundle($node['title'] ?? story_get_title($story_id), $root_scenario, $user);
     } else {
         $choice_taken = trim((string) ($node['choice_taken'] ?? ''));
         if ($choice_taken === '') {
             json_error('This page is missing the choice text needed for regeneration.', 400);
         }
-        $prompt_bundle = build_continuation_prompt_bundle($story_id, $node['parent_id'], $choice_taken, true);
+        $prompt_bundle = build_continuation_prompt_bundle($story_id, $node['parent_id'], $choice_taken, true, $user);
     }
 
     $system_prompt = $prompt_bundle['system_prompt'];
     $story_context = append_story_regeneration_guidance($prompt_bundle['story_context'], $steer_prompt);
     $active_key = $key_record;
-    $provider = new AIProvider($active_key);
+    $provider = api_ai_provider($active_key, $user);
     $parsed = null;
     $last_error = '';
     $raw_response = '';
@@ -639,7 +647,7 @@ function handle_regenerate_node(): void
             } catch (RuntimeException $e) {
                 json_error($e->getMessage(), 500);
             }
-            $provider = new AIProvider($active_key);
+            $provider = api_ai_provider($active_key, $user);
             $last_error = '';
             $raw_response = '';
 
@@ -777,7 +785,7 @@ function handle_regenerate_pending_choices(): void
     $story_context = append_story_regeneration_guidance($prompt_bundle['story_context'], $steer_prompt);
 
     $active_key = $key_record;
-    $provider = new AIProvider($active_key);
+    $provider = api_ai_provider($active_key, $user);
     $choices = null;
     $last_error = '';
     $raw_response = '';
@@ -815,7 +823,7 @@ function handle_regenerate_pending_choices(): void
                 json_error($e->getMessage(), 500);
             }
 
-            $provider = new AIProvider($active_key);
+            $provider = api_ai_provider($active_key, $user);
             $last_error = '';
             $raw_response = '';
 
@@ -967,19 +975,19 @@ function handle_stream_regenerate_node(): void
         if ($root_scenario === '') {
             $root_scenario = story_get_scenario_essentials($story_id);
         }
-        $prompt_bundle = build_opening_prompt_bundle($node['title'] ?? story_get_title($story_id), $root_scenario);
+        $prompt_bundle = build_opening_prompt_bundle($node['title'] ?? story_get_title($story_id), $root_scenario, $user);
     } else {
         $choice_taken = trim((string) ($node['choice_taken'] ?? ''));
         if ($choice_taken === '') {
             sse_event('error', ['error' => 'This page is missing the choice text needed for regeneration.']);
             exit;
         }
-        $prompt_bundle = build_continuation_prompt_bundle($story_id, $node['parent_id'], $choice_taken, true);
+        $prompt_bundle = build_continuation_prompt_bundle($story_id, $node['parent_id'], $choice_taken, true, $user);
     }
 
     $system_prompt = $prompt_bundle['system_prompt'];
     $story_context = append_story_regeneration_guidance($prompt_bundle['story_context'], $steer_prompt);
-    $provider = new AIProvider($key_record);
+    $provider = api_ai_provider($key_record, $user);
     $active_key = $key_record;
     $tokens_sent = 0;
     $raw_response = '';
@@ -1010,7 +1018,7 @@ function handle_stream_regenerate_node(): void
                     sse_event('error', ['error' => $e3->getMessage()]);
                     exit;
                 }
-                $provider = new AIProvider($active_key);
+                $provider = api_ai_provider($active_key, $user);
                 sse_event('info', ['key_label' => $active_key['label'] ?? 'Unknown', 'fallback' => true]);
 
                 try {
@@ -1278,12 +1286,12 @@ function handle_stream_generate_node(): void
     }
 
     $prompt_bundle = $is_opening
-        ? build_opening_prompt_bundle($title, $scenario)
-        : build_continuation_prompt_bundle($story_id, $parent_node_id, $choice_text, $check_quarantine);
+        ? build_opening_prompt_bundle($title, $scenario, $user)
+        : build_continuation_prompt_bundle($story_id, $parent_node_id, $choice_text, $check_quarantine, $user);
     $system_prompt = $prompt_bundle['system_prompt'];
     $story_context = $prompt_bundle['story_context'];
 
-    $provider   = new AIProvider($key_record);
+    $provider   = api_ai_provider($key_record, $user);
     $active_key = $key_record;
 
     // Track tokens sent so we know whether we can still fall back transparently
@@ -1317,7 +1325,7 @@ function handle_stream_generate_node(): void
                     sse_event('error', ['error' => $e3->getMessage()]);
                     exit;
                 }
-                $provider   = new AIProvider($active_key);
+                $provider   = api_ai_provider($active_key, $user);
                 sse_event('info', ['key_label' => $active_key['label'] ?? 'Unknown', 'fallback' => true]);
 
                 try {
@@ -1472,7 +1480,7 @@ function handle_test_api_key(): void
         json_error($e->getMessage(), 500);
     }
 
-    $provider = new AIProvider($key_record);
+    $provider = api_ai_provider($key_record, $user);
     $result = $provider->testConnection();
 
     json_success($result);
@@ -1766,7 +1774,7 @@ function handle_list_api_models(): void
         ];
     }
 
-    $provider_client = new AIProvider($record);
+    $provider_client = api_ai_provider($record, current_user());
 
     try {
         $models = $provider_client->listModels();
@@ -2089,7 +2097,7 @@ function build_image_context_summary(string $story_id, string $node_id, array $i
             . "Do NOT describe plot events. Output plain prose only — no bullet points, no labels.";
 
     try {
-        $provider = new AIProvider(api_key_prepare_for_use($text_key));
+        $provider = api_ai_provider(api_key_prepare_for_use($text_key), $user);
         $summary  = trim($provider->generateText($system, $prompt));
         return $summary;
     } catch (RuntimeException $e) {
@@ -2153,7 +2161,7 @@ function handle_generate_image(): void
     } catch (RuntimeException $e) {
         json_error($e->getMessage(), 500);
     }
-    $provider   = new AIProvider($active_key);
+    $provider   = api_ai_provider($active_key, $user);
 
     try {
         $image_data = $provider->generateImage($prompt);
@@ -2178,7 +2186,7 @@ function handle_generate_image(): void
                 } catch (RuntimeException $e3) {
                     json_error($e3->getMessage(), 500);
                 }
-                $provider   = new AIProvider($active_key);
+                $provider   = api_ai_provider($active_key, $user);
 
                 try {
                     $image_data = $provider->generateImage($prompt);
@@ -2727,11 +2735,11 @@ function handle_preview_prompt(): void
     $image_prompt  = '';
 
     if ($is_opening) {
-        $prompt_bundle = build_opening_prompt_bundle($title, $scenario);
+        $prompt_bundle = build_opening_prompt_bundle($title, $scenario, $user);
         $system_prompt = $prompt_bundle['system_prompt'];
         $story_context = $prompt_bundle['story_context'];
     } elseif ($story_id !== '' && $parent_node_id !== '') {
-        $prompt_bundle = build_continuation_prompt_bundle($story_id, $parent_node_id, $choice_text, true);
+        $prompt_bundle = build_continuation_prompt_bundle($story_id, $parent_node_id, $choice_text, true, $user);
         $system_prompt = $prompt_bundle['system_prompt'];
         $story_context = $prompt_bundle['story_context'];
 

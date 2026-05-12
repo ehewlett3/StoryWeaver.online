@@ -9,46 +9,18 @@
 
 require_once __DIR__ . '/helpers.php';
 require_once __DIR__ . '/nodes.php';
+require_once __DIR__ . '/ai_settings.php';
 
 /** Maximum total characters for the assembled context string. */
 define('MAX_CONTEXT_CHARS', 12000);
 define('SCENARIO_ESSENTIALS_MAX_CHARS', 4000);
 
 /**
- * The verbatim system prompt from §3.2.
- *
- * @param string $scenario_essentials Optional scenario description to prepend.
- * @return string The full system prompt.
+ * Get the effective story-generation system prompt for the active user.
  */
-function get_system_prompt(string $scenario_essentials = ''): string
+function get_system_prompt(?array $user = null): string
 {
-    $prompt = <<<'PROMPT'
-You are a collaborative storytelling engine for a choose-your-own-adventure game.
-Always respond with ONLY valid JSON matching this exact schema — no markdown fences, no extra keys, no preamble:
-
-{
-  "paragraphs": ["<paragraph 1>", "<paragraph 2>"],
-  "choices": [
-    {"id": 1, "text": "<short action phrase>"},
-    {"id": 2, "text": "<short action phrase>"},
-    {"id": 3, "text": "<short action phrase>"}
-  ]
-}
-
-Rules:
-- Exactly 2 paragraphs unless the user has explicitly requested more or fewer.
-- Exactly 3 choices unless the last node is a story ending (then 0 choices and add "ending": true).
-- Each paragraph: 3–6 sentences of vivid, present-tense narrative.
-- Each choice: 4–12 words, active voice, no punctuation at end
-- Never include the player's previous choice as an available choice again.
-- Never break the JSON schema.
-PROMPT;
-
-    if ($scenario_essentials !== '') {
-        $prompt = "Scenario: " . $scenario_essentials . "\n\n" . $prompt;
-    }
-
-    return $prompt;
+    return ai_story_system_prompt($user);
 }
 
 /**
@@ -199,11 +171,11 @@ function build_story_prompt(array $entries, string $choice_text, string $scenari
  *
  * @return array{scenario_essentials: string, system_prompt: string, story_context: string}
  */
-function build_opening_prompt_bundle(string $title, string $scenario_essentials = ''): array
+function build_opening_prompt_bundle(string $title, string $scenario_essentials = '', ?array $user = null): array
 {
     return [
         'scenario_essentials' => $scenario_essentials,
-        'system_prompt'       => get_system_prompt(),
+        'system_prompt'       => get_system_prompt($user),
         'story_context'       => build_opening_prompt($title, $scenario_essentials),
     ];
 }
@@ -214,7 +186,7 @@ function build_opening_prompt_bundle(string $title, string $scenario_essentials 
  * @param bool $check_quarantine Also read quarantined nodes when building context.
  * @return array{scenario_essentials: string, system_prompt: string, story_context: string}
  */
-function build_continuation_prompt_bundle(string $story_id, string $parent_node_id, string $choice_text, bool $check_quarantine = false): array
+function build_continuation_prompt_bundle(string $story_id, string $parent_node_id, string $choice_text, bool $check_quarantine = false, ?array $user = null): array
 {
     $scenario_essentials = story_get_scenario_essentials($story_id);
     $entries = reconstruct_context($story_id, $parent_node_id, $check_quarantine);
@@ -222,7 +194,7 @@ function build_continuation_prompt_bundle(string $story_id, string $parent_node_
 
     return [
         'scenario_essentials' => $scenario_essentials,
-        'system_prompt'       => get_system_prompt(),
+        'system_prompt'       => get_system_prompt($user),
         'story_context'       => build_story_prompt($entries, $choice_text, $scenario_essentials),
     ];
 }

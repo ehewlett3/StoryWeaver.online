@@ -2099,6 +2099,19 @@ document.addEventListener('DOMContentLoaded', function () {
      * Homepage Announcement Editor
      * ================================================================*/
 
+    var announcementPanel = document.getElementById('sw-announcement-panel');
+    if (announcementPanel) {
+        try {
+            if (window.sessionStorage.getItem('sw-announcement-seen') === '1') {
+                announcementPanel.open = false;
+            } else {
+                window.sessionStorage.setItem('sw-announcement-seen', '1');
+            }
+        } catch (err) {
+            console.warn('[SW] Unable to persist announcement collapse state for this session.', err);
+        }
+    }
+
     var announcementEditor = document.getElementById('sw-announcement-editor');
 
     if (announcementEditor) {

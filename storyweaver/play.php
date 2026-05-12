@@ -37,6 +37,14 @@ switch ($action) {
  * ====================================================================*/
 
 /**
+ * Build an AI provider client using the active user's generation settings.
+ */
+function play_ai_provider(array $key_record, ?array $user = null): AIProvider
+{
+    return new AIProvider($key_record, ai_generation_options_for_user($user));
+}
+
+/**
  * Create a new story with a root node.
  *
  * Expects POST fields: title (required), scenario_essentials (optional), use_ai (optional).
@@ -79,9 +87,9 @@ function handle_new_story(): void
         if ($key_record !== null) {
             try {
                 $key_record = api_key_prepare_for_use($key_record);
-                $prompt_bundle = build_opening_prompt_bundle($title, $scenario);
+                $prompt_bundle = build_opening_prompt_bundle($title, $scenario, $user);
 
-                $provider = new AIProvider($key_record);
+                $provider = play_ai_provider($key_record, $user);
                 $raw_response = $provider->generateText($prompt_bundle['system_prompt'], $prompt_bundle['story_context']);
                 $parsed = parse_ai_response($raw_response);
 
@@ -194,9 +202,9 @@ function handle_continue_choice(): void
     if ($key_record !== null) {
         try {
             $key_record = api_key_prepare_for_use($key_record);
-            $prompt_bundle = build_continuation_prompt_bundle($story_id, $parent_node_id, $chosen, $check_q);
+            $prompt_bundle = build_continuation_prompt_bundle($story_id, $parent_node_id, $chosen, $check_q, $user);
 
-            $provider = new AIProvider($key_record);
+            $provider = play_ai_provider($key_record, $user);
             $raw_response = $provider->generateText($prompt_bundle['system_prompt'], $prompt_bundle['story_context']);
             $parsed = parse_ai_response($raw_response);
 

@@ -76,7 +76,7 @@ $base = base_url();
             <p><strong>Guests</strong> can read stories, follow branches, and use shared AI keys. Logged-in contributors can also edit their own pages and manage their own API keys.</p>
             <p>Use <strong>📚 Stories</strong> to return to the main list. Use <strong>❓ Help</strong> any time you need a refresher on features or roles.</p>
             <p>To begin, click <strong>Begin New Story</strong>. You can start manually, let AI generate the opening, or start with AI and then branch into manual or custom-action play whenever you like.</p>
-            <p>Admins can also post a rich-text homepage <strong>Announcement</strong> above the story list for site news, events, or maintenance notes.</p>
+            <p>Admins can also post a rich-text homepage <strong>News and Announcements</strong> panel above the story list for site news, events, or maintenance notes. It starts expanded, then collapses automatically on later visits during the same browser session.</p>
         </section>
 
         <section id="story-flow" class="sw-help-section">
@@ -106,13 +106,16 @@ $base = base_url();
         </section>
 
         <section id="settings-keys" class="sw-help-section">
-            <h2>🔑 Settings & API keys</h2>
-            <p>Open <strong>⚙️ Settings</strong> to manage AI providers and your account.</p>
+            <h2>🔑 Settings &amp; AI controls</h2>
+            <p>Open <strong>⚙️ Settings</strong> to manage AI providers, prompt/schema controls, and your account.</p>
             <ul class="sw-help-list">
                 <li><strong>API Keys</strong> store provider, base URL, text model, image model, scope, and an optional fallback key.</li>
                 <li><strong>Fetch Models</strong> asks the configured provider for available models and fills the dropdowns.</li>
                 <li><strong>Edit</strong> lets you rename a key and change its settings without revealing the stored secret.</li>
                 <li><strong>Default Public API Key</strong> lets admins choose which shared <strong>All</strong>-scoped key guests and other users get by default when more than one shared key is active.</li>
+                <li><strong>AI</strong> lets each logged-in user edit their story system prompt text plus controls like temperature, top P, and max output tokens.</li>
+                <li><strong>Shared JSON Schema</strong> is appended separately to story-generation prompts. Admins can edit it, and can optionally extend that permission to editors and/or contributors.</li>
+                <li><strong>Reset to Defaults</strong> restores your AI settings, and for authorized schema editors can also restore the default shared schema.</li>
                 <li><strong>Profile</strong> updates your username and email.</li>
                 <li><strong>Password</strong> changes your login password.</li>
             </ul>
@@ -141,7 +144,7 @@ $base = base_url();
                 <li><strong>Guest / Viewer</strong> — read and continue stories using shared AI keys.</li>
                 <li><strong>Contributor</strong> — edit your own pages and manage your own API keys.</li>
                 <li><strong>Editor</strong> — edit any page, review concerns, and manage quarantine.</li>
-                <li><strong>Admin</strong> — manage users, site themes, all keys, and prompt preview.</li>
+                <li><strong>Admin</strong> — manage users, site themes, all keys, prompt preview, and the shared JSON schema.</li>
             </ul>
         </section>
 

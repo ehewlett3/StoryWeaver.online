@@ -2,12 +2,13 @@
 /**
  * StoryWeaver — User settings page (§5.6).
  *
- * Allows logged-in users to manage their API keys, change password,
- * and update profile information. Tabs: API Keys, Profile, Password.
+ * Allows logged-in users to manage their API keys, AI settings, change
+ * password, and update profile information.
  */
 
 require_once __DIR__ . '/_lib/auth_check.php';
 require_once __DIR__ . '/_lib/api_keys.php';
+require_once __DIR__ . '/_lib/ai_settings.php';
 
 // Must be logged in
 $user = current_user();
@@ -18,12 +19,24 @@ if ($user === null) {
 
 $base = base_url();
 
-// Handle POST actions (profile, password)
+// Handle POST actions
 if (is_post()) {
     csrf_check();
     $form_action = $_POST['form_action'] ?? '';
 
     switch ($form_action) {
+        case 'save_ai_settings':
+            handle_save_ai_settings($user);
+            break;
+        case 'reset_ai_settings':
+            handle_reset_ai_settings($user);
+            break;
+        case 'save_ai_schema':
+            handle_save_ai_schema($user);
+            break;
+        case 'reset_ai_schema':
+            handle_reset_ai_schema($user);
+            break;
         case 'update_profile':
             handle_update_profile($user);
             break;
@@ -34,7 +47,15 @@ if (is_post()) {
 }
 
 $tab = $_GET['tab'] ?? 'keys';
+if (!in_array($tab, ['keys', 'ai', 'profile', 'password'], true)) {
+    $tab = 'keys';
+}
 $my_keys = api_keys_for_user($user['id']);
+$ai_preferences = ai_user_settings($user['id']);
+$story_schema_text = ai_story_json_schema();
+$schema_edit_level = ai_story_schema_edit_level();
+$can_edit_schema = ai_user_can_edit_story_schema($user);
+$can_manage_schema_permissions = ai_user_can_manage_schema_permissions($user);
 
 // Determine which key would be auto-selected (§3.1 priority)
 $primary_key = api_key_select_for_user($user['id']);
@@ -110,6 +131,7 @@ if (($user['role'] ?? '') === 'admin') {
         <!-- Tabs -->
         <div class="sw-tabs">
             <a href="?tab=keys" class="sw-tab <?= $tab === 'keys' ? 'sw-tab-active' : '' ?>">🔑 API Keys</a>
+            <a href="?tab=ai" class="sw-tab <?= $tab === 'ai' ? 'sw-tab-active' : '' ?>">🤖 AI</a>
             <a href="?tab=profile" class="sw-tab <?= $tab === 'profile' ? 'sw-tab-active' : '' ?>">👤 Profile</a>
             <a href="?tab=password" class="sw-tab <?= $tab === 'password' ? 'sw-tab-active' : '' ?>">🔒 Password</a>
         </div>
@@ -304,6 +326,121 @@ if (($user['role'] ?? '') === 'admin') {
             </form>
         </div>
 
+        <?php elseif ($tab === 'ai'): ?>
+        <div class="sw-settings-section">
+            <h2>AI Prompt &amp; Model Settings</h2>
+            <p class="sw-text-muted">
+                These settings apply to your own text-generation requests. The shared JSON schema below is appended separately so you can tune the prompt text without editing the output structure.
+            </p>
+
+            <form method="POST" action="<?= h(app_url('settings', ['tab' => 'ai'])) ?>" class="sw-form">
+                <input type="hidden" name="form_action" value="save_ai_settings">
+                <input type="hidden" name="_csrf_token" value="<?= h(csrf_token()) ?>">
+
+                <div class="sw-form-group">
+                    <label for="ai-system-prompt" title="This is the editable text portion of your story-generation system prompt. The shared JSON schema is inserted automatically before the Rules section when possible.">Story system prompt</label>
+                    <textarea id="ai-system-prompt"
+                              name="system_prompt_body"
+                              class="sw-input"
+                              rows="14"><?= h($ai_preferences['system_prompt_body']) ?></textarea>
+                    <span class="sw-text-muted sw-text-sm">
+                        Edit the instructions and rules used for story text generation. The shared JSON schema stays separate so the response format can still be managed centrally.
+                    </span>
+                </div>
+
+                <div class="sw-settings-grid">
+                    <div class="sw-form-group">
+                        <label for="ai-temperature" title="Temperature controls randomness. Lower values make output steadier and more predictable; higher values allow more variation.">Temperature</label>
+                        <input type="number" id="ai-temperature" name="temperature" class="sw-input" min="0" max="2" step="0.05"
+                               value="<?= h((string) $ai_preferences['temperature']) ?>">
+                        <span class="sw-text-muted sw-text-sm">Passed only to models that support custom temperature.</span>
+                    </div>
+
+                    <div class="sw-form-group">
+                        <label for="ai-top-p" title="Top P limits token sampling to the most likely slice of the distribution. Lower values narrow the output; 1.0 leaves it unconstrained.">Top P</label>
+                        <input type="number" id="ai-top-p" name="top_p" class="sw-input" min="0" max="1" step="0.05"
+                               value="<?= h((string) $ai_preferences['top_p']) ?>">
+                        <span class="sw-text-muted sw-text-sm">Useful for tightening or widening variation without changing the schema.</span>
+                    </div>
+
+                    <div class="sw-form-group">
+                        <label for="ai-max-tokens" title="Max output tokens caps the length of the model response. Higher values allow longer replies, but some providers may ignore or reject this control.">Max Output Tokens</label>
+                        <input type="number" id="ai-max-tokens" name="max_tokens" class="sw-input" min="128" max="8192" step="1"
+                               value="<?= h((string) $ai_preferences['max_tokens']) ?>">
+                        <span class="sw-text-muted sw-text-sm">Only sent to providers/models that support an explicit response length limit.</span>
+                    </div>
+                </div>
+
+                <div class="sw-form-actions">
+                    <button type="submit" class="sw-btn sw-btn-primary">Save My AI Settings</button>
+                </div>
+            </form>
+
+            <form method="POST" action="<?= h(app_url('settings', ['tab' => 'ai'])) ?>" class="sw-settings-inline-form">
+                <input type="hidden" name="form_action" value="reset_ai_settings">
+                <input type="hidden" name="_csrf_token" value="<?= h(csrf_token()) ?>">
+                <button type="submit" class="sw-btn sw-btn-secondary">Reset My AI Settings to Defaults</button>
+            </form>
+        </div>
+
+        <div class="sw-settings-section" style="margin-top:2rem;">
+            <h2>Shared JSON Schema</h2>
+            <p class="sw-text-muted">
+                This schema is appended to story-generation prompts for every user. Changing it can break generation if it no longer matches the parser’s expected <code>paragraphs</code> and <code>choices</code> structure.
+            </p>
+
+            <?php if ($can_edit_schema): ?>
+                <form method="POST" action="<?= h(app_url('settings', ['tab' => 'ai'])) ?>" class="sw-form">
+                    <input type="hidden" name="form_action" value="save_ai_schema">
+                    <input type="hidden" name="_csrf_token" value="<?= h(csrf_token()) ?>">
+
+                    <div class="sw-form-group">
+                        <label for="ai-story-schema" title="This is the shared response schema appended to story-generation prompts. Keep the required paragraphs and choices structure intact.">Story JSON schema</label>
+                        <textarea id="ai-story-schema"
+                                  name="story_json_schema"
+                                  class="sw-input sw-theme-editor"
+                                  rows="12"><?= h($story_schema_text) ?></textarea>
+                        <span class="sw-text-muted sw-text-sm">Be careful: schema changes take effect immediately for story generation and prompt preview.</span>
+                    </div>
+
+                    <?php if ($can_manage_schema_permissions): ?>
+                        <div class="sw-form-group">
+                            <label for="ai-schema-edit-level" title="Choose the minimum logged-in role allowed to edit the shared schema text.">Who can edit the shared schema?</label>
+                            <select id="ai-schema-edit-level" name="schema_edit_level" class="sw-input">
+                                <option value="admin" <?= $schema_edit_level === 'admin' ? 'selected' : '' ?>>Admins only</option>
+                                <option value="editor" <?= $schema_edit_level === 'editor' ? 'selected' : '' ?>>Admins + editors</option>
+                                <option value="contributor" <?= $schema_edit_level === 'contributor' ? 'selected' : '' ?>>Admins + editors + contributors</option>
+                            </select>
+                            <span class="sw-text-muted sw-text-sm">Admins always retain access, even when the permission is extended.</span>
+                        </div>
+                    <?php endif; ?>
+
+                    <div class="sw-form-actions">
+                        <button type="submit" class="sw-btn sw-btn-primary">Save Shared Schema</button>
+                    </div>
+                </form>
+
+                <form method="POST" action="<?= h(app_url('settings', ['tab' => 'ai'])) ?>" class="sw-settings-inline-form">
+                    <input type="hidden" name="form_action" value="reset_ai_schema">
+                    <input type="hidden" name="_csrf_token" value="<?= h(csrf_token()) ?>">
+                    <button type="submit" class="sw-btn sw-btn-secondary">
+                        <?= $can_manage_schema_permissions ? 'Reset Default JSON Schema and Permissions' : 'Reset JSON Schema to Default' ?>
+                    </button>
+                </form>
+            <?php else: ?>
+                <div class="sw-form-group">
+                    <label for="ai-story-schema-readonly">Current shared schema</label>
+                    <textarea id="ai-story-schema-readonly"
+                              class="sw-input sw-theme-editor"
+                              rows="12"
+                              readonly><?= h($story_schema_text) ?></textarea>
+                    <span class="sw-text-muted sw-text-sm">
+                        You can edit your own story system prompt above, but this shared schema currently requires <?= h($schema_edit_level) ?> access to change.
+                    </span>
+                </div>
+            <?php endif; ?>
+        </div>
+
         <?php elseif ($tab === 'profile'): ?>
         <!-- ─── Profile Tab ─── -->
         <div class="sw-settings-section">
@@ -459,4 +596,80 @@ function handle_change_password(array $user): void
 
     flash('success', 'Password changed successfully.');
     redirect(app_url('settings', ['tab' => 'password']));
+}
+
+/**
+ * Save per-user AI prompt and generation settings.
+ */
+function handle_save_ai_settings(array $user): void
+{
+    try {
+        ai_settings_update_user((string) $user['id'], [
+            'system_prompt_body' => (string) ($_POST['system_prompt_body'] ?? ''),
+            'temperature'        => $_POST['temperature'] ?? null,
+            'top_p'              => $_POST['top_p'] ?? null,
+            'max_tokens'         => $_POST['max_tokens'] ?? null,
+        ]);
+        flash('success', 'AI settings updated.');
+    } catch (InvalidArgumentException $e) {
+        flash('error', $e->getMessage());
+    }
+
+    redirect(app_url('settings', ['tab' => 'ai']));
+}
+
+/**
+ * Reset per-user AI settings back to defaults.
+ */
+function handle_reset_ai_settings(array $user): void
+{
+    try {
+        ai_settings_reset_user((string) $user['id']);
+        flash('success', 'Your AI settings were reset to defaults.');
+    } catch (InvalidArgumentException $e) {
+        flash('error', $e->getMessage());
+    }
+
+    redirect(app_url('settings', ['tab' => 'ai']));
+}
+
+/**
+ * Save the shared story schema and, for admins, its edit permissions.
+ */
+function handle_save_ai_schema(array $user): void
+{
+    if (!ai_user_can_edit_story_schema($user)) {
+        flash('error', 'You do not have permission to edit the shared JSON schema.');
+        redirect(app_url('settings', ['tab' => 'ai']));
+    }
+
+    $settings = [
+        'story_json_schema' => (string) ($_POST['story_json_schema'] ?? ''),
+    ];
+
+    if (ai_user_can_manage_schema_permissions($user)) {
+        $settings['schema_edit_level'] = (string) ($_POST['schema_edit_level'] ?? 'admin');
+    }
+
+    ai_settings_update_site($settings);
+    flash('success', 'Shared JSON schema updated.');
+    redirect(app_url('settings', ['tab' => 'ai']));
+}
+
+/**
+ * Reset the shared schema text back to its default.
+ */
+function handle_reset_ai_schema(array $user): void
+{
+    if (!ai_user_can_edit_story_schema($user)) {
+        flash('error', 'You do not have permission to reset the shared JSON schema.');
+        redirect(app_url('settings', ['tab' => 'ai']));
+    }
+
+    $include_permissions = ai_user_can_manage_schema_permissions($user);
+    ai_settings_reset_site($include_permissions);
+    flash('success', $include_permissions
+        ? 'The shared JSON schema and permissions were reset to defaults.'
+        : 'The shared JSON schema was reset to its default.');
+    redirect(app_url('settings', ['tab' => 'ai']));
 }
