@@ -943,23 +943,261 @@ document.addEventListener('DOMContentLoaded', function () {
      * ================================================================*/
 
     var genImageBtn = document.getElementById('sw-gen-image-btn');
-    if (genImageBtn) {
-        var genImageController = null;
+    var regenImageBtn = document.getElementById('sw-regen-image-btn');
+    var uploadInput = document.getElementById('sw-image-upload');
+    var imageUploadLabel = document.querySelector('label[for="sw-image-upload"]');
+    var imageControlsHost = null;
+    var imageActionInsertBefore = null;
+    var imageActionStoryId = '';
+    var imageActionNodeId = '';
+    var canGenerateImages = !!genImageBtn || !!regenImageBtn;
+    var canManageImages = !!uploadInput;
+    var genImageController = null;
+    var regenImageController = null;
+    var imageEstimateStorageKey = 'sw-image-generation-history-ms';
+    var activeImageProgress = null;
 
-        genImageBtn.addEventListener('click', function () {
+    [genImageBtn, regenImageBtn, imageUploadLabel, document.getElementById('sw-preview-prompt-btn'),
+     document.getElementById('sw-regenerate-story-btn'), document.getElementById('sw-open-pending-choices-btn')].forEach(function (el) {
+        if (!el) return;
+        if (!imageControlsHost && typeof el.closest === 'function') {
+            imageControlsHost = el.closest('.sw-ai-indicator');
+        }
+        if (!imageActionInsertBefore && el !== genImageBtn && el !== regenImageBtn && imageControlsHost && el.parentNode === imageControlsHost) {
+            imageActionInsertBefore = el;
+        }
+        if (!imageActionStoryId) {
+            imageActionStoryId = el.getAttribute('data-story-id') || '';
+        }
+        if (!imageActionNodeId) {
+            imageActionNodeId = el.getAttribute('data-node-id') || '';
+        }
+    });
+
+    function getCurrentNodeImageUrl() {
+        var currentImage = document.querySelector('#sw-images .sw-node-image');
+        return currentImage ? (currentImage.getAttribute('src') || '') : '';
+    }
+
+    function readImageGenerationEstimate() {
+        try {
+            var raw = window.localStorage.getItem(imageEstimateStorageKey);
+            if (!raw) {
+                return 0;
+            }
+
+            var history = JSON.parse(raw);
+            if (!Array.isArray(history) || history.length === 0) {
+                return 0;
+            }
+
+            var total = 0;
+            var count = 0;
+            history.forEach(function (entry) {
+                var value = Number(entry);
+                if (!isFinite(value) || value < 1000) {
+                    return;
+                }
+                total += Math.min(value, 180000);
+                count++;
+            });
+
+            if (count === 0) {
+                return 0;
+            }
+
+            return Math.round(total / count);
+        } catch (err) {
+            return 0;
+        }
+    }
+
+    function storeImageGenerationEstimate(elapsedMs) {
+        if (!isFinite(elapsedMs) || elapsedMs < 250) {
+            return;
+        }
+
+        var normalized = Math.max(1000, Math.min(Math.round(elapsedMs), 180000));
+
+        try {
+            var raw = window.localStorage.getItem(imageEstimateStorageKey);
+            var history = raw ? JSON.parse(raw) : [];
+            if (!Array.isArray(history)) {
+                history = [];
+            }
+            history.push(normalized);
+            if (history.length > 12) {
+                history = history.slice(history.length - 12);
+            }
+            window.localStorage.setItem(imageEstimateStorageKey, JSON.stringify(history));
+        } catch (err) {
+            // Ignore localStorage failures.
+        }
+    }
+
+    function formatRemainingEstimate(ms) {
+        var seconds = Math.max(1, Math.round(ms / 1000));
+        return seconds + 's';
+    }
+
+    function clearImageProgress(btn, idleText) {
+        if (activeImageProgress && activeImageProgress.button === btn) {
+            if (activeImageProgress.timerId) {
+                window.clearInterval(activeImageProgress.timerId);
+            }
+            activeImageProgress = null;
+        }
+
+        if (!btn) return;
+
+        btn.classList.remove('sw-btn-progress', 'sw-btn-progress-estimating', 'sw-btn-danger');
+        btn.style.removeProperty('--sw-progress-percent');
+        btn.removeAttribute('title');
+
+        if (document.body.contains(btn)) {
+            btn.disabled = false;
+            btn.textContent = idleText;
+        }
+    }
+
+    function updateImageProgressVisual(state) {
+        if (!state || !state.button) return;
+
+        var btn = state.button;
+        if (!document.body.contains(btn)) {
+            clearImageProgress(btn, '');
+            return;
+        }
+
+        var elapsed = Date.now() - state.startedAt;
+        var progressPercent = 16;
+        if (state.estimateMs > 0) {
+            progressPercent = Math.min(100, Math.max(6, (elapsed / state.estimateMs) * 100));
+            var remaining = Math.max(0, state.estimateMs - elapsed);
+            btn.title = remaining > 0
+                ? 'Estimated time remaining: about ' + formatRemainingEstimate(remaining)
+                : 'Working longer than the current local average estimate.';
+        } else {
+            progressPercent = Math.min(32, 14 + (elapsed / 1800));
+            btn.title = 'Timing this image generation to build a local average estimate.';
+        }
+
+        btn.style.setProperty('--sw-progress-percent', progressPercent.toFixed(1) + '%');
+    }
+
+    function startImageProgress(btn, activeText, canAbort) {
+        clearImageProgress(activeImageProgress ? activeImageProgress.button : null, '');
+
+        var estimateMs = readImageGenerationEstimate();
+        var startedAt = Date.now();
+
+        btn.disabled = !canAbort;
+        btn.textContent = activeText;
+        btn.classList.add('sw-btn-danger', 'sw-btn-progress');
+        btn.classList.toggle('sw-btn-progress-estimating', estimateMs <= 0);
+
+        activeImageProgress = {
+            button: btn,
+            startedAt: startedAt,
+            estimateMs: estimateMs,
+            timerId: window.setInterval(function () {
+                updateImageProgressVisual(activeImageProgress);
+            }, 150)
+        };
+
+        updateImageProgressVisual(activeImageProgress);
+        return startedAt;
+    }
+
+    function bindDeleteImageButton(btn) {
+        if (!btn || btn.dataset.bound === '1') return;
+        btn.dataset.bound = '1';
+
+        btn.addEventListener('click', function () {
+            if (!confirm('Delete this image?')) return;
+            var imageUrl = btn.getAttribute('data-image-url');
+            btn.disabled = true;
+            fetch('api?action=delete_image', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    image_url: imageUrl,
+                    _csrf_token: csrfValue
+                })
+            })
+            .then(function (res) { return res.json(); })
+            .then(function (data) {
+                if (data.ok) {
+                    var wrap = btn.closest('.sw-image-wrap');
+                    if (wrap) {
+                        wrap.remove();
+                    }
+                    updateImageActionButtons();
+                } else {
+                    alert(data.error || 'Failed to delete image.');
+                    btn.disabled = false;
+                }
+            })
+            .catch(function () {
+                alert('Delete request failed.');
+                btn.disabled = false;
+            });
+        });
+    }
+
+    function createImageWrap(imageUrl) {
+        var wrap = document.createElement('div');
+        wrap.className = 'sw-image-wrap';
+
+        var img = document.createElement('img');
+        img.src = imageUrl;
+        img.alt = 'Story illustration';
+        img.className = 'sw-node-image';
+        wrap.appendChild(img);
+
+        if (canManageImages) {
+            var delBtn = document.createElement('button');
+            delBtn.type = 'button';
+            delBtn.className = 'sw-image-delete-btn';
+            delBtn.setAttribute('data-image-url', imageUrl);
+            delBtn.title = 'Delete image';
+            delBtn.textContent = '×';
+            bindDeleteImageButton(delBtn);
+            wrap.appendChild(delBtn);
+        }
+
+        return wrap;
+    }
+
+    function insertImageActionButton(btn) {
+        if (!imageControlsHost) return;
+        if (imageActionInsertBefore && imageActionInsertBefore.parentNode === imageControlsHost) {
+            imageControlsHost.insertBefore(btn, imageActionInsertBefore);
+            return;
+        }
+        imageControlsHost.appendChild(btn);
+    }
+
+    function bindGenerateImageButton(btn) {
+        if (!btn || btn.dataset.bound === '1') return;
+        btn.dataset.bound = '1';
+
+        btn.addEventListener('click', function () {
             if (genImageController) {
                 genImageController.abort();
                 return;
             }
 
-            var storyId = genImageBtn.getAttribute('data-story-id');
-            var nodeId = genImageBtn.getAttribute('data-node-id');
+            var storyId = btn.getAttribute('data-story-id');
+            var nodeId = btn.getAttribute('data-node-id');
             var keyId = getSelectedImageKeyId() || getSelectedTextKeyId();
 
             genImageController = typeof AbortController === 'function' ? new AbortController() : null;
-            genImageBtn.disabled = !genImageController;
-            genImageBtn.textContent = genImageController ? '✖ Abort Image Generation' : '🖼️ Generating…';
-            genImageBtn.classList.toggle('sw-btn-danger', !!genImageController);
+            var requestStartedAt = startImageProgress(
+                btn,
+                genImageController ? '✖ Abort Image Generation' : '🖼️ Generating…',
+                !!genImageController
+            );
 
             var generateImageRequest = {
                 method: 'POST',
@@ -979,15 +1217,13 @@ document.addEventListener('DOMContentLoaded', function () {
             .then(function (res) { return res.json(); })
             .then(function (data) {
                 if (data.ok && data.image_url) {
+                    storeImageGenerationEstimate(Date.now() - requestStartedAt);
                     var imgContainer = document.getElementById('sw-images');
                     if (imgContainer) {
-                        var img = document.createElement('img');
-                        img.src = data.image_url;
-                        img.alt = 'Story illustration';
-                        img.className = 'sw-node-image';
-                        imgContainer.appendChild(img);
+                        imgContainer.appendChild(createImageWrap(data.image_url));
                     }
-                    genImageBtn.remove();
+                    showFlash('Image generated!', 'success');
+                    updateImageActionButtons();
                 } else {
                     alert(data.error || 'Image generation failed.');
                 }
@@ -1001,54 +1237,15 @@ document.addEventListener('DOMContentLoaded', function () {
             })
             .finally(function () {
                 genImageController = null;
-                if (!document.body.contains(genImageBtn)) {
-                    return;
-                }
-                genImageBtn.disabled = false;
-                genImageBtn.textContent = '🖼️ Generate Image';
-                genImageBtn.classList.remove('sw-btn-danger');
+                clearImageProgress(btn, '🖼️ Generate Image');
             });
         });
     }
 
     /* ==================================================================
-     * Individual image delete buttons (admin/editors)
-     * ================================================================*/
-
-    document.querySelectorAll('.sw-image-delete-btn').forEach(function (btn) {
-        btn.addEventListener('click', function () {
-            if (!confirm('Delete this image?')) return;
-            var imageUrl = btn.getAttribute('data-image-url');
-            btn.disabled = true;
-            fetch('api?action=delete_image', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    image_url: imageUrl,
-                    _csrf_token: csrfValue
-                })
-            })
-            .then(function (res) { return res.json(); })
-            .then(function (data) {
-                if (data.ok) {
-                    btn.closest('.sw-image-wrap').remove();
-                } else {
-                    alert(data.error || 'Failed to delete image.');
-                    btn.disabled = false;
-                }
-            })
-            .catch(function () {
-                alert('Delete request failed.');
-                btn.disabled = false;
-            });
-        });
-    });
-
-    /* ==================================================================
      * Image Upload (logged-in users with edit access)
      * ================================================================*/
 
-    var uploadInput = document.getElementById('sw-image-upload');
     if (uploadInput) {
         uploadInput.addEventListener('change', function () {
             var file = uploadInput.files[0];
@@ -1078,7 +1275,7 @@ document.addEventListener('DOMContentLoaded', function () {
             formData.append('_csrf_token', csrfValue);
 
             // Disable while uploading
-            var label = document.querySelector('label[for="sw-image-upload"]');
+            var label = imageUploadLabel;
             if (label) {
                 label.textContent = '📁 Uploading…';
                 label.style.pointerEvents = 'none';
@@ -1094,39 +1291,9 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (data.ok && data.image_url) {
                     var imgContainer = document.getElementById('sw-images');
                     if (imgContainer) {
-                        var wrap = document.createElement('div');
-                        wrap.className = 'sw-image-wrap';
-                        var img = document.createElement('img');
-                        img.src = data.image_url;
-                        img.alt = 'Story illustration';
-                        img.className = 'sw-node-image';
-                        wrap.appendChild(img);
-
-                        // Add delete button
-                        var delBtn = document.createElement('button');
-                        delBtn.type = 'button';
-                        delBtn.className = 'sw-image-delete-btn';
-                        delBtn.setAttribute('data-image-url', data.image_url);
-                        delBtn.title = 'Delete image';
-                        delBtn.textContent = '×';
-                        delBtn.addEventListener('click', function () {
-                            if (!confirm('Delete this image?')) return;
-                            delBtn.disabled = true;
-                            fetch('api?action=delete_image', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ image_url: data.image_url, _csrf_token: csrfValue })
-                            })
-                            .then(function (r) { return r.json(); })
-                            .then(function (d) {
-                                if (d.ok) wrap.remove();
-                                else { showFlash(d.error || 'Failed to delete.', 'error'); delBtn.disabled = false; }
-                            })
-                            .catch(function () { showFlash('Delete request failed.', 'error'); delBtn.disabled = false; });
-                        });
-                        wrap.appendChild(delBtn);
-                        imgContainer.appendChild(wrap);
+                        imgContainer.appendChild(createImageWrap(data.image_url));
                     }
+                    updateImageActionButtons();
                     showFlash('Image uploaded!', 'success');
                 } else {
                     showFlash(data.error || 'Upload failed.', 'error');
@@ -1149,11 +1316,11 @@ document.addEventListener('DOMContentLoaded', function () {
      * Image Regeneration with side-by-side comparison
      * ================================================================*/
 
-    var regenImageBtn = document.getElementById('sw-regen-image-btn');
-    if (regenImageBtn) {
-        var regenImageController = null;
+    function bindRegenerateImageButton(btn) {
+        if (!btn || btn.dataset.bound === '1') return;
+        btn.dataset.bound = '1';
 
-        regenImageBtn.addEventListener('click', function () {
+        btn.addEventListener('click', function () {
             if (regenImageController) {
                 regenImageController.abort();
                 return;
@@ -1164,15 +1331,17 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
 
-            var storyId = regenImageBtn.getAttribute('data-story-id');
-            var nodeId = regenImageBtn.getAttribute('data-node-id');
-            var existingUrl = regenImageBtn.getAttribute('data-existing-image');
+            var storyId = btn.getAttribute('data-story-id');
+            var nodeId = btn.getAttribute('data-node-id');
+            var existingUrl = btn.getAttribute('data-existing-image');
             var keyId = getSelectedImageKeyId() || getSelectedTextKeyId();
 
             regenImageController = typeof AbortController === 'function' ? new AbortController() : null;
-            regenImageBtn.disabled = !regenImageController;
-            regenImageBtn.textContent = regenImageController ? '✖ Abort Image Regeneration' : '🖼️ Generating new image…';
-            regenImageBtn.classList.toggle('sw-btn-danger', !!regenImageController);
+            var requestStartedAt = startImageProgress(
+                btn,
+                regenImageController ? '✖ Abort Image Regeneration' : '🖼️ Generating new image…',
+                !!regenImageController
+            );
 
             var regenerateImageRequest = {
                 method: 'POST',
@@ -1193,6 +1362,7 @@ document.addEventListener('DOMContentLoaded', function () {
             .then(function (res) { return res.json(); })
             .then(function (data) {
                 if (data.ok && data.image_url) {
+                    storeImageGenerationEstimate(Date.now() - requestStartedAt);
                     showImageCompareModal(existingUrl, data.image_url);
                 } else {
                     alert(data.error || 'Image generation failed.');
@@ -1207,12 +1377,63 @@ document.addEventListener('DOMContentLoaded', function () {
             })
             .finally(function () {
                 regenImageController = null;
-                regenImageBtn.disabled = false;
-                regenImageBtn.textContent = '🖼️ Regenerate Image';
-                regenImageBtn.classList.remove('sw-btn-danger');
+                clearImageProgress(btn, '🖼️ Regenerate Image');
             });
         });
     }
+
+    function updateImageActionButtons() {
+        if (!canGenerateImages || !imageControlsHost) {
+            return;
+        }
+
+        var currentImageUrl = getCurrentNodeImageUrl();
+        var currentGenBtn = document.getElementById('sw-gen-image-btn');
+        var currentRegenBtn = document.getElementById('sw-regen-image-btn');
+
+        if (currentImageUrl !== '') {
+            if (currentGenBtn) {
+                currentGenBtn.remove();
+                currentGenBtn = null;
+            }
+
+            if (!currentRegenBtn) {
+                currentRegenBtn = document.createElement('button');
+                currentRegenBtn.type = 'button';
+                currentRegenBtn.id = 'sw-regen-image-btn';
+                currentRegenBtn.className = 'sw-btn sw-btn-sm sw-btn-secondary';
+                currentRegenBtn.textContent = '🖼️ Regenerate Image';
+                insertImageActionButton(currentRegenBtn);
+            }
+
+            currentRegenBtn.setAttribute('data-story-id', imageActionStoryId);
+            currentRegenBtn.setAttribute('data-node-id', imageActionNodeId);
+            currentRegenBtn.setAttribute('data-existing-image', currentImageUrl);
+            bindRegenerateImageButton(currentRegenBtn);
+            return;
+        }
+
+        if (currentRegenBtn) {
+            currentRegenBtn.remove();
+            currentRegenBtn = null;
+        }
+
+        if (!currentGenBtn) {
+            currentGenBtn = document.createElement('button');
+            currentGenBtn.type = 'button';
+            currentGenBtn.id = 'sw-gen-image-btn';
+            currentGenBtn.className = 'sw-btn sw-btn-sm sw-btn-secondary';
+            currentGenBtn.textContent = '🖼️ Generate Image';
+            insertImageActionButton(currentGenBtn);
+        }
+
+        currentGenBtn.setAttribute('data-story-id', imageActionStoryId);
+        currentGenBtn.setAttribute('data-node-id', imageActionNodeId);
+        bindGenerateImageButton(currentGenBtn);
+    }
+
+    document.querySelectorAll('.sw-image-delete-btn').forEach(bindDeleteImageButton);
+    updateImageActionButtons();
 
     function showImageCompareModal(oldUrl, newUrl) {
         // Create modal overlay

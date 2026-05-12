@@ -66,16 +66,17 @@ No Composer, npm, Node.js, or database is required.
 
 5. Visit the site in your browser. You'll be prompted to create an admin account on first run.
 
-### Option 2: PHP Built-In Server (Development)
+### Option 2: Local Testing with XAMPP (Recommended)
 
-```bash
-cd StoryWeaver.online
-php -S localhost:8080
-```
+For local testing, use a full Apache/PHP stack such as **XAMPP** rather than PHP's built-in server.
 
-Then visit `http://localhost:8080/storyweaver/` in your browser.
+1. Install XAMPP and start **Apache**.
+2. Copy the `storyweaver/` directory into your XAMPP web root, usually:
+   - **Windows:** `C:\xampp\htdocs\storyweaver`
+   - **Linux:** `/opt/lampp/htdocs/storyweaver`
+3. Open `http://localhost/storyweaver/` in your browser.
 
-> **Note:** The PHP built-in server does not process `.htaccess` rules. Private directories (`_data/`, `_lib/`) will be accessible via URL in this mode, and extensionless routes like `/help` or `/settings` will not work there. Use Apache for production and for testing the app's clean URLs.
+> **Note:** StoryWeaver relies on Apache-style `.htaccess` behavior for private directories and extensionless routes. PHP's built-in server (`php -S`) is not recommended for local testing because it does not behave like the real deployment environment.
 
 ### First Run
 
