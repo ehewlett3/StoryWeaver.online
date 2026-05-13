@@ -99,6 +99,10 @@ if ($is_root_node) {
     }
 }
 $effective_theme = $story_theme !== '' ? $story_theme : theme_css();
+$editable_story_title = html_entity_decode((string) ($node['title'] ?? ''), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+$can_rename_story = $user !== null
+    && $is_root_node
+    && role_level((string) ($user['role'] ?? 'viewer')) >= role_level('editor');
 
 // Can this user change story theme? (story creator or admin, on root node only)
 $can_change_theme = false;
@@ -198,6 +202,30 @@ if ($user && $is_root_node) {
                 <?php else: ?>
                     <div class="sw-story-scenario-content"><?= nl2br(h($story_scenario_essentials)) ?></div>
                 <?php endif; ?>
+            </details>
+        <?php endif; ?>
+
+        <?php if ($can_rename_story): ?>
+            <details class="sw-story-title" id="sw-story-title-details">
+                <summary class="sw-story-title-summary">Story Title</summary>
+                <div class="sw-story-title-editor">
+                    <input type="text"
+                           id="sw-story-title-input"
+                           class="sw-input"
+                           maxlength="200"
+                           data-story-id="<?= h($story_id) ?>"
+                           data-original-value="<?= h($editable_story_title) ?>"
+                           value="<?= h($editable_story_title) ?>">
+                    <div class="sw-story-title-actions">
+                        <button type="button" id="sw-save-story-title-btn" class="sw-btn sw-btn-sm sw-btn-secondary">
+                            Save Story Title
+                        </button>
+                        <button type="button" id="sw-cancel-story-title-btn" class="sw-btn sw-btn-sm sw-btn-secondary">
+                            Cancel
+                        </button>
+                        <span id="sw-story-title-status" class="sw-editor-status"></span>
+                    </div>
+                </div>
             </details>
         <?php endif; ?>
 

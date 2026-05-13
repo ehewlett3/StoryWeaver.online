@@ -2097,6 +2097,391 @@ document.addEventListener('DOMContentLoaded', function () {
      * In-Place Editor (only active on edit.php)
      * ================================================================*/
 
+    function paragraphEditorIsBlockTag(tag) {
+        return ['blockquote', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'li', 'ol', 'pre', 'style', 'ul']
+            .indexOf(String(tag || '').toLowerCase()) !== -1;
+    }
+
+    function paragraphEditorCloneForSource(node) {
+        if (!node || node.nodeType !== 1) {
+            return node;
+        }
+
+        var clone = node.cloneNode(true);
+        if (clone.removeAttribute) {
+            clone.removeAttribute('contenteditable');
+        }
+        return clone;
+    }
+
+    function paragraphEditorEscapeHtml(text) {
+        var div = document.createElement('div');
+        div.textContent = String(text || '');
+        return div.innerHTML;
+    }
+
+    function paragraphEditorTextToParagraphHtml(text) {
+        return paragraphEditorEscapeHtml(String(text || '').replace(/\r\n?/g, '\n')).replace(/\n/g, '<br>');
+    }
+
+    function paragraphEditorNormalizePastedText(text) {
+        text = String(text || '').replace(/\r\n?/g, '\n');
+        text = text.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '');
+        text = text.replace(/<br\s*\/?>/gi, '\n');
+        text = text.replace(/<\/div\s*>/gi, '\n\n');
+        text = text.replace(/<div\b[^>]*>/gi, '');
+        text = text.replace(/<\/span\s*>/gi, '');
+        text = text.replace(/<span\b[^>]*>/gi, '');
+        return text;
+    }
+
+    function paragraphEditorSplitSourceBlocks(source) {
+        source = String(source || '').replace(/\r\n?/g, '\n').trim();
+        if (source === '') {
+            return [];
+        }
+
+        return source.split(/\n\s*\n+/).map(function (block) {
+            return block.trim();
+        }).filter(function (block) {
+            return block !== '';
+        });
+    }
+
+    function paragraphEditorCollectBlocks(container) {
+        var blocks = [];
+        if (!container) return blocks;
+
+        Array.from(container.childNodes).forEach(function (node) {
+            if (node.nodeType === 3) {
+                var text = String(node.textContent || '').trim();
+                if (text !== '') {
+                    var textWrap = document.createElement('div');
+                    textWrap.textContent = text;
+                    blocks.push(textWrap.innerHTML);
+                }
+                return;
+            }
+
+            if (node.nodeType !== 1) return;
+
+            var tag = node.nodeName.toLowerCase();
+            if (tag === 'p' && node.classList.contains('sw-para')) {
+                var inner = String(node.innerHTML || '').trim();
+                blocks.push(inner === '<br>' ? '' : inner);
+                return;
+            }
+
+            if (paragraphEditorIsBlockTag(tag)) {
+                var clone = paragraphEditorCloneForSource(node);
+                blocks.push((clone.outerHTML || '').trim());
+                return;
+            }
+
+            var inlineClone = paragraphEditorCloneForSource(node);
+            blocks.push((inlineClone.outerHTML || '').trim());
+        });
+
+        return blocks;
+    }
+
+    function paragraphEditorParagraphsToSource(container) {
+        return paragraphEditorCollectBlocks(container).join('\n\n').trim();
+    }
+
+    function paragraphEditorParseSource(source) {
+        var blocks = [];
+        paragraphEditorSplitSourceBlocks(source).forEach(function (segment) {
+            var wrapper = document.createElement('div');
+            var normalizedSegment = String(segment || '').replace(/\r\n?/g, '\n').trim();
+            if (normalizedSegment === '') {
+                return;
+            }
+
+            wrapper.innerHTML = normalizedSegment;
+            var elementChildren = Array.from(wrapper.childNodes).filter(function (node) {
+                return node.nodeType === 1;
+            });
+
+            if (elementChildren.length === 1 && wrapper.childNodes.length === 1) {
+                var element = elementChildren[0];
+                var tag = element.nodeName.toLowerCase();
+                if (tag === 'p') {
+                    blocks.push(String(element.innerHTML || '').trim());
+                    return;
+                }
+
+                if (paragraphEditorIsBlockTag(tag)) {
+                    blocks.push((paragraphEditorCloneForSource(element).outerHTML || '').trim());
+                    return;
+                }
+            }
+
+            if (elementChildren.length === 0) {
+                blocks.push(paragraphEditorTextToParagraphHtml(wrapper.textContent || normalizedSegment));
+                return;
+            }
+
+            blocks.push(normalizedSegment.replace(/\n/g, '<br>'));
+        });
+
+        return blocks;
+    }
+
+    function paragraphEditorCreateParagraph(html) {
+        var paragraph = document.createElement('p');
+        paragraph.className = 'sw-para';
+        paragraph.setAttribute('contenteditable', 'true');
+        paragraph.innerHTML = String(html || '');
+        return paragraph;
+    }
+
+    function paragraphEditorRenderBlocks(container, blocks) {
+        if (!container) return;
+
+        container.innerHTML = '';
+        if (!Array.isArray(blocks) || blocks.length === 0) {
+            var emptyPara = document.createElement('p');
+            emptyPara.className = 'sw-para';
+            emptyPara.setAttribute('contenteditable', 'true');
+            container.appendChild(emptyPara);
+            return;
+        }
+
+        blocks.forEach(function (block) {
+            block = String(block || '').trim();
+            if (block === '') {
+                return;
+            }
+
+            var blockWrapper = document.createElement('div');
+            blockWrapper.innerHTML = block;
+
+            var elementChildren = Array.from(blockWrapper.childNodes).filter(function (node) {
+                return node.nodeType === 1;
+            });
+
+            if (elementChildren.length === 1 && blockWrapper.childNodes.length === 1) {
+                var element = elementChildren[0];
+                var tag = element.nodeName.toLowerCase();
+                if (tag === 'p') {
+                    var para = document.createElement('p');
+                    para.className = 'sw-para';
+                    para.setAttribute('contenteditable', 'true');
+                    para.innerHTML = String(element.innerHTML || '');
+                    container.appendChild(para);
+                    return;
+                }
+
+                if (paragraphEditorIsBlockTag(tag)) {
+                    if (tag !== 'style' && tag !== 'hr') {
+                        element.setAttribute('contenteditable', 'true');
+                    }
+                    container.appendChild(element);
+                    return;
+                }
+            }
+
+            var paragraph = document.createElement('p');
+            paragraph.className = 'sw-para';
+            paragraph.setAttribute('contenteditable', 'true');
+            paragraph.innerHTML = block;
+            container.appendChild(paragraph);
+        });
+
+        if (!container.children.length) {
+            container.appendChild(paragraphEditorCreateParagraph(''));
+        }
+    }
+
+    function paragraphEditorIsEmpty(paragraph) {
+        if (!paragraph) return true;
+
+        var html = String(paragraph.innerHTML || '')
+            .replace(/<br\s*\/?>/gi, '')
+            .replace(/&nbsp;/gi, '')
+            .replace(/\u00a0/g, '')
+            .trim();
+        var text = String(paragraph.textContent || '')
+            .replace(/\u00a0/g, '')
+            .trim();
+
+        return html === '' && text === '';
+    }
+
+    function paragraphEditorSelectionAtStart(paragraph) {
+        if (!paragraph || !window.getSelection || !document.createRange) {
+            return false;
+        }
+
+        var selection = window.getSelection();
+        if (!selection || selection.rangeCount === 0) {
+            return false;
+        }
+
+        var range = selection.getRangeAt(0);
+        if (!range.collapsed || !paragraph.contains(range.startContainer)) {
+            return false;
+        }
+
+        var prefix = range.cloneRange();
+        prefix.selectNodeContents(paragraph);
+        prefix.setEnd(range.startContainer, range.startOffset);
+        return prefix.toString() === '';
+    }
+
+    function paragraphEditorFocusEnd(paragraph) {
+        if (!paragraph) return;
+        paragraph.focus();
+        if (!window.getSelection || !document.createRange) {
+            return;
+        }
+
+        var selection = window.getSelection();
+        var range = document.createRange();
+        range.selectNodeContents(paragraph);
+        range.collapse(false);
+        selection.removeAllRanges();
+        selection.addRange(range);
+    }
+
+    function paragraphEditorHandlePaste(event, container, isSourceMode, onChange) {
+        if (!container || isSourceMode || event.defaultPrevented) {
+            return;
+        }
+
+        var editable = event.target && event.target.closest ? event.target.closest('[contenteditable="true"]') : null;
+        if (!editable || !container.contains(editable)) {
+            return;
+        }
+
+        var clipboard = event.clipboardData || window.clipboardData;
+        if (!clipboard) {
+            return;
+        }
+
+        var text = clipboard.getData('text/plain');
+        if (text === '') {
+            var html = clipboard.getData('text/html');
+            if (html !== '') {
+                var textWrapper = document.createElement('div');
+                textWrapper.innerHTML = html;
+                text = textWrapper.textContent || textWrapper.innerText || '';
+            }
+        }
+
+        text = paragraphEditorNormalizePastedText(text);
+
+        if (text === '') {
+            return;
+        }
+
+        event.preventDefault();
+
+        if (!editable.classList.contains('sw-para')) {
+            document.execCommand('insertText', false, text);
+            if (typeof onChange === 'function') {
+                onChange();
+            }
+            return;
+        }
+
+        var blocks = paragraphEditorSplitSourceBlocks(text).map(function (block) {
+            return paragraphEditorTextToParagraphHtml(block);
+        });
+        if (blocks.length === 0) {
+            blocks = [paragraphEditorTextToParagraphHtml(text)];
+        }
+
+        var selection = window.getSelection ? window.getSelection() : null;
+        if (!selection || selection.rangeCount === 0) {
+            editable.innerHTML += blocks.join('<br><br>');
+            paragraphEditorFocusEnd(editable);
+            if (typeof onChange === 'function') {
+                onChange();
+            }
+            return;
+        }
+
+        var range = selection.getRangeAt(0);
+        if (!editable.contains(range.startContainer) || !editable.contains(range.endContainer)) {
+            document.execCommand('insertText', false, text);
+            if (typeof onChange === 'function') {
+                onChange();
+            }
+            return;
+        }
+
+        var beforeRange = document.createRange();
+        beforeRange.selectNodeContents(editable);
+        beforeRange.setEnd(range.startContainer, range.startOffset);
+
+        var afterRange = document.createRange();
+        afterRange.selectNodeContents(editable);
+        afterRange.setStart(range.endContainer, range.endOffset);
+
+        var beforeWrapper = document.createElement('div');
+        beforeWrapper.appendChild(beforeRange.cloneContents());
+        var afterWrapper = document.createElement('div');
+        afterWrapper.appendChild(afterRange.cloneContents());
+
+        editable.innerHTML = beforeWrapper.innerHTML + blocks[0];
+        var lastParagraph = editable;
+        for (var i = 1; i < blocks.length; i += 1) {
+            var paragraph = paragraphEditorCreateParagraph(blocks[i]);
+            lastParagraph.insertAdjacentElement('afterend', paragraph);
+            lastParagraph = paragraph;
+        }
+        lastParagraph.innerHTML += afterWrapper.innerHTML;
+        paragraphEditorFocusEnd(lastParagraph);
+        if (typeof onChange === 'function') {
+            onChange();
+        }
+    }
+
+    function paragraphEditorHandleBackspace(event, container, isSourceMode, onChange) {
+        if (!container || isSourceMode || event.key !== 'Backspace' || event.defaultPrevented) {
+            return;
+        }
+
+        var paragraph = event.target && event.target.closest ? event.target.closest('.sw-para') : null;
+        if (!paragraph || !container.contains(paragraph)) {
+            return;
+        }
+
+        var paragraphs = Array.from(container.querySelectorAll('.sw-para'));
+        if (paragraphs.length <= 1) {
+            return;
+        }
+
+        if (paragraphEditorIsEmpty(paragraph)) {
+            event.preventDefault();
+            var currentIndex = paragraphs.indexOf(paragraph);
+            var focusTarget = paragraphs[currentIndex - 1] || paragraphs[currentIndex + 1] || null;
+            paragraph.remove();
+            paragraphEditorFocusEnd(focusTarget);
+            if (typeof onChange === 'function') {
+                onChange();
+            }
+            return;
+        }
+
+        if (!paragraphEditorSelectionAtStart(paragraph)) {
+            return;
+        }
+
+        var previous = paragraph.previousElementSibling;
+        if (!previous || !previous.classList || !previous.classList.contains('sw-para') || !paragraphEditorIsEmpty(previous)) {
+            return;
+        }
+
+        event.preventDefault();
+        previous.remove();
+        if (typeof onChange === 'function') {
+            onChange();
+        }
+    }
+
     var editorContainer = document.getElementById('sw-editor');
 
     if (editorContainer) {
@@ -2118,6 +2503,18 @@ document.addEventListener('DOMContentLoaded', function () {
         editorContent.addEventListener('input', function () {
             hasUnsaved = true;
             updateStatus('Unsaved changes');
+        });
+        editorContent.addEventListener('paste', function (e) {
+            paragraphEditorHandlePaste(e, editorContent, isSourceMode, function () {
+                hasUnsaved = true;
+                updateStatus('Unsaved changes');
+            });
+        });
+        editorContent.addEventListener('keydown', function (e) {
+            paragraphEditorHandleBackspace(e, editorContent, isSourceMode, function () {
+                hasUnsaved = true;
+                updateStatus('Unsaved changes');
+            });
         });
     }
 
@@ -2171,35 +2568,14 @@ document.addEventListener('DOMContentLoaded', function () {
 
             if (isSourceMode) {
                 // Switch to source mode — collect paragraph HTML
-                var paragraphs = editorContent.querySelectorAll('.sw-para');
-                var html = '';
-                paragraphs.forEach(function (p) {
-                    html += p.innerHTML + '\n\n';
-                });
-                sourceArea.value = html.trim();
+                sourceArea.value = paragraphEditorParagraphsToSource(editorContent);
                 editorContent.style.display = 'none';
                 sourceArea.style.display = 'block';
                 sourceToggle.textContent = '🔤 Visual';
                 sourceArea.focus();
             } else {
                 // Switch back to visual — parse source into paragraphs
-                var lines = sourceArea.value.split(/\n\n+/);
-                editorContent.innerHTML = '';
-                lines.forEach(function (line) {
-                    line = line.trim();
-                    if (line === '') return;
-                    var p = document.createElement('p');
-                    p.className = 'sw-para';
-                    p.setAttribute('contenteditable', 'true');
-                    p.innerHTML = line;
-                    editorContent.appendChild(p);
-                });
-                if (editorContent.children.length === 0) {
-                    var p = document.createElement('p');
-                    p.className = 'sw-para';
-                    p.setAttribute('contenteditable', 'true');
-                    editorContent.appendChild(p);
-                }
+                paragraphEditorRenderBlocks(editorContent, paragraphEditorParseSource(sourceArea.value));
                 editorContent.style.display = 'block';
                 sourceArea.style.display = 'none';
                 sourceToggle.textContent = '\u003C/\u003E Source';
@@ -2237,19 +2613,11 @@ document.addEventListener('DOMContentLoaded', function () {
 
         if (isSourceMode) {
             // Parse from source textarea
-            var lines = sourceArea.value.split(/\n\n+/);
-            lines.forEach(function (line) {
-                line = line.trim();
-                if (line !== '') paragraphs.push(line);
-            });
+            paragraphs = paragraphEditorParseSource(sourceArea.value);
         } else {
-            // Collect from contenteditable elements
-            var paras = editorContent.querySelectorAll('.sw-para');
-            paras.forEach(function (p) {
-                var html = p.innerHTML.trim();
-                if (html !== '' && html !== '<br>') {
-                    paragraphs.push(html);
-                }
+            // Collect from contenteditable elements and top-level blocks
+            paragraphs = paragraphEditorCollectBlocks(editorContent).filter(function (line) {
+                return String(line || '').trim() !== '';
             });
         }
 
@@ -2369,42 +2737,20 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function announcementPopulateParagraphs(paragraphs) {
-        announcementContent.innerHTML = '';
-        if (!Array.isArray(paragraphs) || paragraphs.length === 0) {
-            var emptyPara = document.createElement('p');
-            emptyPara.className = 'sw-para';
-            emptyPara.setAttribute('contenteditable', 'true');
-            announcementContent.appendChild(emptyPara);
-            return;
-        }
-
-        paragraphs.forEach(function (paragraph) {
-            var para = document.createElement('p');
-            para.className = 'sw-para';
-            para.setAttribute('contenteditable', 'true');
-            para.innerHTML = paragraph;
-            announcementContent.appendChild(para);
-        });
+        paragraphEditorRenderBlocks(announcementContent, paragraphs);
     }
 
     function announcementCollectParagraphs() {
         var paragraphs = [];
 
         if (announcementSourceMode) {
-            var lines = announcementSource.value.split(/\n\n+/);
-            lines.forEach(function (line) {
-                line = line.trim();
-                if (line !== '') {
-                    paragraphs.push(line);
-                }
-            });
+            paragraphs = paragraphEditorParseSource(announcementSource.value);
             return paragraphs;
         }
 
-        announcementContent.querySelectorAll('.sw-para').forEach(function (p) {
-            var html = p.innerHTML.trim();
-            if (html !== '' && html !== '<br>') {
-                paragraphs.push(html);
+        paragraphEditorCollectBlocks(announcementContent).forEach(function (line) {
+            if (String(line || '').trim() !== '') {
+                paragraphs.push(line);
             }
         });
 
@@ -2424,6 +2770,12 @@ document.addEventListener('DOMContentLoaded', function () {
 
     if (announcementContent) {
         announcementContent.addEventListener('input', markAnnouncementDirty);
+        announcementContent.addEventListener('paste', function (e) {
+            paragraphEditorHandlePaste(e, announcementContent, announcementSourceMode, markAnnouncementDirty);
+        });
+        announcementContent.addEventListener('keydown', function (e) {
+            paragraphEditorHandleBackspace(e, announcementContent, announcementSourceMode, markAnnouncementDirty);
+        });
     }
 
     window.addEventListener('beforeunload', function (e) {
@@ -2466,12 +2818,7 @@ document.addEventListener('DOMContentLoaded', function () {
     if (announcementSourceToggle && announcementSource && announcementContent) {
         announcementSourceToggle.addEventListener('click', function () {
             if (!announcementSourceMode) {
-                var paragraphs = announcementContent.querySelectorAll('.sw-para');
-                var html = '';
-                paragraphs.forEach(function (p) {
-                    html += p.innerHTML + '\n\n';
-                });
-                announcementSource.value = html.trim();
+                announcementSource.value = paragraphEditorParagraphsToSource(announcementContent);
                 announcementContent.style.display = 'none';
                 announcementSource.style.display = 'block';
                 announcementSourceToggle.textContent = '🔤 Visual';
@@ -2601,6 +2948,81 @@ document.addEventListener('DOMContentLoaded', function () {
             }
             if (scenarioDetails) {
                 scenarioDetails.open = false;
+            }
+        });
+    }
+
+    const storyTitleBtn = document.getElementById('sw-save-story-title-btn');
+    if (storyTitleBtn) {
+        storyTitleBtn.addEventListener('click', async function () {
+            const titleInput = document.getElementById('sw-story-title-input');
+            const titleDetails = document.getElementById('sw-story-title-details');
+            const status = document.getElementById('sw-story-title-status');
+            const storyId = titleInput?.dataset.storyId;
+
+            if (!titleInput || !storyId) {
+                return;
+            }
+
+            storyTitleBtn.disabled = true;
+            if (status) {
+                status.textContent = 'Saving…';
+                status.className = 'sw-editor-status';
+            }
+
+            try {
+                const resp = await fetch(apiBase + '/api?action=rename_story', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        _csrf_token: csrfValue,
+                        story_id: storyId,
+                        title: titleInput.value
+                    })
+                });
+                const data = await resp.json();
+                if (data.ok) {
+                    titleInput.value = data.title || titleInput.value;
+                    titleInput.dataset.originalValue = titleInput.value;
+                    if (status) {
+                        status.textContent = '';
+                        status.className = 'sw-editor-status';
+                    }
+                    if (titleDetails) {
+                        titleDetails.open = false;
+                    }
+                    location.reload();
+                } else if (status) {
+                    status.textContent = data.error || 'Failed to save story title.';
+                    status.className = 'sw-editor-status sw-editor-status-error';
+                }
+            } catch (err) {
+                if (status) {
+                    status.textContent = 'Error: ' + err.message;
+                    status.className = 'sw-editor-status sw-editor-status-error';
+                }
+            } finally {
+                storyTitleBtn.disabled = false;
+            }
+        });
+    }
+
+    const storyTitleCancelBtn = document.getElementById('sw-cancel-story-title-btn');
+    if (storyTitleCancelBtn) {
+        storyTitleCancelBtn.addEventListener('click', function () {
+            const titleInput = document.getElementById('sw-story-title-input');
+            const titleDetails = document.getElementById('sw-story-title-details');
+            const status = document.getElementById('sw-story-title-status');
+
+            if (titleInput) {
+                titleInput.value = titleInput.dataset.originalValue || '';
+            }
+            if (status) {
+                status.textContent = '';
+                status.className = 'sw-editor-status';
+            }
+            if (titleDetails) {
+                titleDetails.open = false;
             }
         });
     }

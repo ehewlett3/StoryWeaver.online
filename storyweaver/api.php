@@ -112,6 +112,9 @@ switch ($action) {
     case 'set_story_theme':
         handle_set_story_theme();
         break;
+    case 'rename_story':
+        handle_rename_story();
+        break;
     case 'update_story_scenario':
         handle_update_story_scenario();
         break;
@@ -343,7 +346,7 @@ function handle_generate_node(): void
     $parent_node_id = $input['parent_node_id'] ?? '';
     $choice_text    = trim($input['choice_text'] ?? '');
     $scenario       = normalize_scenario_essentials((string) ($input['scenario_essentials'] ?? ''));
-    $title          = trim($input['title'] ?? '');
+    $title          = normalize_story_title((string) ($input['title'] ?? ''));
     $key_id         = trim($input['key_id'] ?? '');
 
     // Determine the user for key selection
@@ -1229,7 +1232,7 @@ function handle_stream_generate_node(): void
     $parent_node_id = $input['parent_node_id'] ?? '';
     $choice_text    = trim($input['choice_text'] ?? '');
     $scenario       = normalize_scenario_essentials((string) ($input['scenario_essentials'] ?? ''));
-    $title          = trim($input['title'] ?? '');
+    $title          = normalize_story_title((string) ($input['title'] ?? ''));
     $key_id         = trim($input['key_id'] ?? '');
 
     $user = current_user();
@@ -2491,6 +2494,43 @@ function handle_save_theme_css(): void
 }
 
 /**
+ * Rename a story — editor+ only.
+ */
+function handle_rename_story(): void
+{
+    $input = get_json_input();
+    csrf_check($input['_csrf_token'] ?? '');
+
+    $user = current_user();
+    if (!$user || role_level($user['role']) < role_level('editor')) {
+        json_error('Editor or admin access required.', 403);
+    }
+
+    $story_id = trim((string) ($input['story_id'] ?? ''));
+    $title = normalize_story_title((string) ($input['title'] ?? ''));
+
+    if (!validate_id($story_id, 'story_')) {
+        json_error('Invalid story ID.');
+    }
+    if ($title === '') {
+        json_error('Story title is required.');
+    }
+
+    if (story_find_root($story_id) === null) {
+        json_error('Story not found.', 404);
+    }
+
+    if (!story_update_title($story_id, $title, (string) ($user['id'] ?? ''))) {
+        json_error('Failed to rename story.', 500);
+    }
+
+    json_success([
+        'message' => 'Story title updated.',
+        'title' => $title,
+    ]);
+}
+
+/**
  * Set per-story theme — story initiator or admin only.
  */
 function handle_set_story_theme(): void
@@ -2719,7 +2759,7 @@ function handle_preview_prompt(): void
     $story_id       = trim($input['story_id'] ?? '');
     $parent_node_id = trim($input['parent_node_id'] ?? '');
     $choice_text    = trim($input['choice_text'] ?? '(example choice)');
-    $title          = trim($input['title'] ?? '');
+    $title          = normalize_story_title((string) ($input['title'] ?? ''));
     $scenario       = normalize_scenario_essentials((string) ($input['scenario_essentials'] ?? ''));
 
     $is_opening = ($parent_node_id === '' && $title !== '');

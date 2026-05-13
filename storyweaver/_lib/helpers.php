@@ -130,6 +130,27 @@ function h(?string $str): string
 }
 
 /**
+ * Remove embedded <style> blocks from an HTML fragment.
+ */
+function strip_style_blocks(string $html): string
+{
+    return preg_replace('#<style\b[^>]*>.*?</style>#is', '', $html) ?? $html;
+}
+
+/**
+ * Convert stored rich HTML to plain text without leaking stylesheet content.
+ */
+function rich_html_to_text(string $html): string
+{
+    $html = strip_style_blocks($html);
+    $html = str_ireplace(['<br />', '<br/>', '<br>'], "\n", $html);
+    $text = html_entity_decode(strip_tags($html), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    $text = preg_replace('/[ \t]+/u', ' ', $text) ?? $text;
+    $text = preg_replace("/\R{3,}/u", "\n\n", $text) ?? $text;
+    return trim($text);
+}
+
+/**
  * Send a redirect header and exit.
  *
  * @param string $url URL to redirect to.
@@ -699,6 +720,10 @@ function site_announcement_paragraphs(): array
  */
 function site_announcement_html(): string
 {
+    if (function_exists('render_rich_content_fragments')) {
+        return trim(render_rich_content_fragments(site_announcement_paragraphs(), '', false));
+    }
+
     $html = '';
     foreach (site_announcement_paragraphs() as $paragraph) {
         $html .= '<p class="sw-para">' . $paragraph . "</p>\n";
@@ -719,9 +744,7 @@ function site_announcement_text(): string
 
     $parts = [];
     foreach ($paragraphs as $paragraph) {
-        $text = str_ireplace(['<br />', '<br/>', '<br>'], "\n", $paragraph);
-        $text = html_entity_decode(strip_tags($text), ENT_QUOTES | ENT_HTML5, 'UTF-8');
-        $text = trim($text);
+        $text = rich_html_to_text($paragraph);
         if ($text !== '') {
             $parts[] = $text;
         }

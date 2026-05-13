@@ -80,9 +80,7 @@ function reconstruct_context(string $story_id, string $node_id, bool $check_quar
         // Build paragraph text from the node's paragraphs
         $para_text = '';
         foreach ($node['paragraphs'] as $p) {
-            // Strip HTML tags for the context string
-            $clean = strip_tags($p);
-            $clean = html_entity_decode($clean, ENT_QUOTES, 'UTF-8');
+            $clean = rich_html_to_text((string) $p);
             $para_text .= trim($clean) . "\n";
         }
 

@@ -53,17 +53,13 @@ function play_ai_provider(array $key_record, ?array $user = null): AIProvider
  */
 function handle_new_story(): void
 {
-    $title    = trim($_POST['title'] ?? '');
+    $title    = normalize_story_title((string) ($_POST['title'] ?? ''));
     $scenario = normalize_scenario_essentials((string) ($_POST['scenario_essentials'] ?? ''));
     $use_ai   = ($_POST['use_ai'] ?? '1') === '1';
 
     if ($title === '') {
         flash('error', 'A story title is required.');
         redirect(app_url('index'));
-    }
-
-    if (strlen($title) > 200) {
-        $title = substr($title, 0, 200);
     }
 
     $user = current_user();

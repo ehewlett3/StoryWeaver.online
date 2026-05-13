@@ -25,11 +25,7 @@ $can_jump_latest = $user !== null && ($user['role'] ?? '') === 'admin';
  */
 function index_plain_text_from_html(string $html): string
 {
-    $html = str_ireplace(['<br />', '<br/>', '<br>'], "\n", $html);
-    $text = html_entity_decode(strip_tags($html), ENT_QUOTES | ENT_HTML5, 'UTF-8');
-    $text = preg_replace('/[ \t]+/u', ' ', $text) ?? $text;
-    $text = preg_replace("/\R{3,}/u", "\n\n", $text) ?? $text;
-    return trim($text);
+    return rich_html_to_text($html);
 }
 
 /**
@@ -134,7 +130,7 @@ function index_story_card_snippet(array $root_node): string
     } else {
         $parts = [];
         foreach (($root_node['paragraphs'] ?? []) as $paragraph) {
-            $clean = html_entity_decode(strip_tags((string) $paragraph), ENT_QUOTES, 'UTF-8');
+            $clean = rich_html_to_text((string) $paragraph);
             $clean = trim(preg_replace('/\s+/u', ' ', $clean) ?? $clean);
             if ($clean !== '') {
                 $parts[] = $clean;
@@ -297,7 +293,7 @@ if (is_dir($stories_dir)) {
                                             <div id="sw-announcement-editor-content" class="sw-editor-content">
                                                 <?php if (!empty($announcement_paragraphs)): ?>
                                                     <?php foreach ($announcement_paragraphs as $paragraph): ?>
-                                                        <p class="sw-para" contenteditable="true"><?= $paragraph ?></p>
+                                                        <?= render_editor_fragment_html((string) $paragraph) . "\n" ?>
                                                     <?php endforeach; ?>
                                                 <?php else: ?>
                                                     <p class="sw-para" contenteditable="true"></p>

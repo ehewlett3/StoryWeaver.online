@@ -87,6 +87,7 @@ $base = base_url();
                 <li><strong>Pending choices</strong> do not have a child page yet, so following them creates the next page.</li>
                 <li><strong>Custom actions</strong> let you type your own next move in an AI-dungeon-style flow instead of choosing one of the listed options.</li>
                 <li><strong>Edit</strong> opens the rich-text editor for pages you are allowed to change.</li>
+                <li><strong>Story Title</strong> on a root page lets editors and admins rename the whole story.</li>
                 <li><strong>Latest Page</strong> lets admins jump straight to the newest page in a story from the story list or while viewing that story.</li>
                 <li><strong>Mixed play</strong> means one story can freely combine tap-to-choose branches, typed actions, AI continuation, and hand-written scenes.</li>
             </ul>
@@ -143,8 +144,8 @@ $base = base_url();
             <ul class="sw-help-list">
                 <li><strong>Guest / Viewer</strong> — read and continue stories using shared AI keys.</li>
                 <li><strong>Contributor</strong> — edit your own pages and manage your own API keys.</li>
-                <li><strong>Editor</strong> — edit any page, review concerns, and manage quarantine.</li>
-                <li><strong>Admin</strong> — manage users, site themes, all keys, prompt preview, and the shared JSON schema.</li>
+                <li><strong>Editor</strong> — edit any page, rename stories, review concerns, and manage quarantine.</li>
+                <li><strong>Admin</strong> — manage users, site themes, all keys, prompt preview, the shared JSON schema, and story renaming.</li>
             </ul>
         </section>
 

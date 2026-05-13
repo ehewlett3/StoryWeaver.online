@@ -121,7 +121,7 @@ $cancel_url = node_url($story_id, $node_id);
             <div id="sw-editor-content" class="sw-editor-content">
                 <?php if (!empty($node['paragraphs'])): ?>
                     <?php foreach ($node['paragraphs'] as $para): ?>
-                        <p class="sw-para" contenteditable="true"><?= $para ?></p>
+                        <?= render_editor_fragment_html((string) $para) . "\n" ?>
                     <?php endforeach; ?>
                 <?php else: ?>
                     <p class="sw-para" contenteditable="true"></p>

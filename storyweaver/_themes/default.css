@@ -584,6 +584,12 @@ textarea.sw-theme-editor {
     font-size: 0.85rem;
 }
 
+.sw-story-title {
+    margin: 0 0 1.5rem;
+    color: var(--sw-color-text-muted);
+    font-size: 0.85rem;
+}
+
 .sw-story-scenario-summary {
     cursor: pointer;
     color: inherit;
@@ -592,7 +598,19 @@ textarea.sw-theme-editor {
     list-style-position: inside;
 }
 
+.sw-story-title-summary {
+    cursor: pointer;
+    color: inherit;
+    font-size: inherit;
+    font-weight: 400;
+    list-style-position: inside;
+}
+
 .sw-story-scenario-summary:hover {
+    color: var(--sw-color-primary);
+}
+
+.sw-story-title-summary:hover {
     color: var(--sw-color-primary);
 }
 
@@ -608,13 +626,32 @@ textarea.sw-theme-editor {
     padding-left: 1rem;
 }
 
+.sw-story-title-editor {
+    margin-top: 0.6rem;
+    padding-left: 1rem;
+    max-width: 34rem;
+}
+
 .sw-story-scenario-editor textarea {
     min-height: 10rem;
     font-size: 0.95rem;
     color: var(--sw-color-text);
 }
 
+.sw-story-title-editor .sw-input {
+    font-size: 0.95rem;
+    color: var(--sw-color-text);
+}
+
 .sw-story-scenario-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-top: 0.6rem;
+}
+
+.sw-story-title-actions {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
@@ -631,6 +668,23 @@ textarea.sw-theme-editor {
 
 .sw-node-content .sw-para {
     margin-bottom: 1.25rem;
+}
+
+.sw-node-content ul,
+.sw-node-content ol,
+.sw-announcement-content ul,
+.sw-announcement-content ol,
+.sw-editor-content ul,
+.sw-editor-content ol {
+    margin: 0 0 1rem 1.25rem;
+    padding-left: 1.25rem;
+    list-style-position: outside;
+}
+
+.sw-node-content li,
+.sw-announcement-content li,
+.sw-editor-content li {
+    margin: 0.3rem 0;
 }
 
 .sw-images {

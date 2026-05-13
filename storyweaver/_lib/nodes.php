@@ -118,6 +118,88 @@ function story_get_title(string $story_id): string
 }
 
 /**
+ * Normalize a story title for storage.
+ */
+function normalize_story_title(string $title): string
+{
+    $title = trim(preg_replace('/\s+/u', ' ', $title) ?? $title);
+    if ($title === '') {
+        return '';
+    }
+
+    if (mb_strlen($title, 'UTF-8') > 200) {
+        $title = mb_substr($title, 0, 200, 'UTF-8');
+    }
+
+    return $title;
+}
+
+/**
+ * Rename a story by updating the stored title on every node in the story.
+ */
+function story_update_title(string $story_id, string $title, string $updated_by = ''): bool
+{
+    $title = normalize_story_title($title);
+    if ($title === '') {
+        return false;
+    }
+
+    $root_id = story_find_root($story_id);
+    if ($root_id === null) {
+        return false;
+    }
+
+    if ($updated_by !== '') {
+        $root = node_read($story_id, $root_id, true);
+        if ($root !== null) {
+            $meta = $root['sw_meta'] ?? [];
+            $meta = node_meta_append_history($meta, $updated_by, 'story_renamed');
+            node_update_meta($story_id, $root_id, $meta);
+        }
+    }
+
+    $safe_title = h($title);
+    $updated = false;
+    $locations = [
+        'stories' => STORIES_DIR . '/' . $story_id,
+        'quarantine' => QUARANTINE_DIR . '/' . $story_id,
+    ];
+
+    foreach ($locations as $location => $story_dir) {
+        if (!is_dir($story_dir)) {
+            continue;
+        }
+
+        foreach (glob($story_dir . '/node_*.html') ?: [] as $file) {
+            $html = file_get_contents($file);
+            if ($html === false) {
+                continue;
+            }
+
+            $node = node_parse_html($html, $location);
+            $new_html = node_generate_html([
+                'story_id'     => $node['story_id'] ?: $story_id,
+                'node_id'      => $node['node_id'] ?: basename($file, '.html'),
+                'parent_id'    => $node['parent_id'],
+                'choice_taken' => $node['choice_taken'],
+                'author_id'    => $node['author_id'],
+                'title'        => $safe_title,
+                'paragraphs'   => $node['paragraphs'],
+                'choices'      => $node['choices'],
+                'created_at'   => $node['created_at'],
+                'flagged'      => $node['flagged'],
+                'sw_meta'      => $node['sw_meta'] ?? null,
+            ]);
+
+            atomic_write($file, $new_html);
+            $updated = true;
+        }
+    }
+
+    return $updated;
+}
+
+/**
  * Find the most recently added node in a story.
  *
  * Falls back to file modification time when a node lacks a parseable timestamp.
@@ -380,8 +462,46 @@ function node_parse_html(string $html, string $location = 'stories'): array
         $data['title'] = trim($parts[0]);
     }
 
-    // Extract paragraphs
-    if (preg_match_all('/<p class="sw-para">(.*?)<\/p>/s', $html, $matches)) {
+    // Extract paragraphs / rich blocks from the article body.
+    if (class_exists('DOMDocument')) {
+        $dom = new DOMDocument('1.0', 'UTF-8');
+        $previous = libxml_use_internal_errors(true);
+        $loaded = $dom->loadHTML('<?xml encoding="utf-8" ?>' . $html, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+        libxml_clear_errors();
+        libxml_use_internal_errors($previous);
+
+        if ($loaded) {
+            $xpath = new DOMXPath($dom);
+            $article = $xpath->query('//article[contains(concat(" ", normalize-space(@class), " "), " sw-node-content ")]')->item(0);
+            if ($article instanceof DOMElement) {
+                foreach (iterator_to_array($article->childNodes) as $child) {
+                    if ($child->nodeType === XML_TEXT_NODE) {
+                        $text = trim((string) $child->textContent);
+                        if ($text !== '') {
+                            $data['paragraphs'][] = h($text);
+                        }
+                        continue;
+                    }
+
+                    if (!$child instanceof DOMElement) {
+                        continue;
+                    }
+
+                    $tag = strtolower($child->tagName);
+                    if ($tag === 'p' && str_contains(' ' . $child->getAttribute('class') . ' ', ' sw-para ')) {
+                        $data['paragraphs'][] = trim(dom_node_inner_html($child));
+                        continue;
+                    }
+
+                    if (rich_content_tag_is_block($tag)) {
+                        $data['paragraphs'][] = trim($dom->saveHTML($child));
+                    }
+                }
+            }
+        }
+    }
+
+    if (empty($data['paragraphs']) && preg_match_all('/<p class="sw-para">(.*?)<\/p>/s', $html, $matches)) {
         $data['paragraphs'] = $matches[1];
     }
 
@@ -429,10 +549,7 @@ function node_update_paragraphs(string $story_id, string $node_id, array $paragr
     }
 
     // Build new paragraph HTML
-    $para_html = '';
-    foreach ($paragraphs as $p) {
-        $para_html .= '    <p class="sw-para">' . $p . "</p>\n";
-    }
+    $para_html = render_rich_content_fragments($paragraphs);
 
     // Replace the article content
     $pattern = '/(<article class="sw-node-content">)\s*.*?\s*(<\/article>)/s';
@@ -445,6 +562,108 @@ function node_update_paragraphs(string $story_id, string $node_id, array $paragr
 
     atomic_write($path, $new_html);
     return true;
+}
+
+/**
+ * Return the inner HTML of a DOM node.
+ */
+function dom_node_inner_html(DOMNode $node): string
+{
+    $html = '';
+    foreach (iterator_to_array($node->childNodes) as $child) {
+        $html .= $node->ownerDocument?->saveHTML($child) ?? '';
+    }
+    return $html;
+}
+
+/**
+ * Whether a tag should be treated as a standalone rich block.
+ */
+function rich_content_tag_is_block(string $tag): bool
+{
+    return in_array($tag, [
+        'blockquote', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+        'hr', 'li', 'ol', 'pre', 'style', 'ul',
+    ], true);
+}
+
+/**
+ * Whether a stored fragment is a block element rather than paragraph inner HTML.
+ */
+function rich_content_fragment_is_block(string $fragment): bool
+{
+    $fragment = trim($fragment);
+    if ($fragment === '') {
+        return false;
+    }
+
+    if (preg_match('/^<([a-z0-9:-]+)\b/i', $fragment, $match) !== 1) {
+        return false;
+    }
+
+    return rich_content_tag_is_block(strtolower($match[1]));
+}
+
+/**
+ * Render stored rich fragments for story/article output.
+ *
+ * @param array<int, string> $fragments
+ */
+function render_rich_content_fragments(array $fragments, string $indent = '    ', bool $ensure_empty = true): string
+{
+    $html = '';
+    foreach ($fragments as $fragment) {
+        if (!is_string($fragment)) {
+            continue;
+        }
+
+        $fragment = trim($fragment);
+        if ($fragment === '') {
+            continue;
+        }
+
+        if (rich_content_fragment_is_block($fragment)) {
+            $html .= (preg_replace('/^/m', $indent, $fragment) ?? ($indent . $fragment)) . "\n";
+        } else {
+            $html .= $indent . '<p class="sw-para">' . $fragment . "</p>\n";
+        }
+    }
+
+    if ($html === '' && $ensure_empty) {
+        return $indent . "<p class=\"sw-para\"></p>\n";
+    }
+
+    return $html;
+}
+
+/**
+ * Render a stored fragment for the paragraph editor visual mode.
+ */
+function render_editor_fragment_html(string $fragment): string
+{
+    $fragment = trim($fragment);
+    if ($fragment === '') {
+        return '<p class="sw-para" contenteditable="true"></p>';
+    }
+
+    if (!rich_content_fragment_is_block($fragment)) {
+        return '<p class="sw-para" contenteditable="true">' . $fragment . '</p>';
+    }
+
+    if (preg_match('/^<([a-z0-9:-]+)\b/i', $fragment, $match) !== 1) {
+        return '<p class="sw-para" contenteditable="true">' . $fragment . '</p>';
+    }
+
+    $tag = strtolower($match[1]);
+    if (in_array($tag, ['hr', 'style'], true)) {
+        return $fragment;
+    }
+
+    if (preg_match('/\bcontenteditable\s*=/i', $fragment) === 1) {
+        return $fragment;
+    }
+
+    return preg_replace('/^<([a-z0-9:-]+)\b/i', '<$1 contenteditable="true"', $fragment, 1) ?? $fragment;
 }
 
 /**
@@ -883,13 +1102,7 @@ function node_generate_html(array $params): string
     $root_link = $root_id ?: '#';
 
     // Build paragraphs HTML
-    $para_html = '';
-    foreach ($paragraphs as $p) {
-        $para_html .= '    <p class="sw-para">' . $p . "</p>\n";
-    }
-    if ($para_html === '') {
-        $para_html = "    <p class=\"sw-para\"></p>\n";
-    }
+    $para_html = render_rich_content_fragments($paragraphs);
 
     // Build choices JSON and list HTML
     $choices_json = h(json_encode($choices, JSON_UNESCAPED_UNICODE));
@@ -977,8 +1190,9 @@ HTML;
 /**
  * Sanitize a paragraph of HTML from the contenteditable editor.
  *
- * Allows basic formatting tags (b, i, em, strong, a, br) and strips
- * everything else including <script>, event handlers, etc.
+ * Allows safe inline formatting tags and safe inline CSS, while stripping
+ * everything unsafe including scripts, event handlers, dangerous URLs,
+ * and dangerous CSS values.
  *
  * @param string $html Raw HTML from the editor.
  * @return string Sanitized HTML.
@@ -1013,13 +1227,31 @@ function sanitize_paragraph_html(string $html): string
     }
 
     $allowed = [
-        'a' => ['href'],
-        'b' => [],
+        'a' => ['href', 'title', 'target', 'rel', 'style'],
+        'abbr' => ['title', 'style'],
+        'b' => ['style'],
+        'blockquote' => ['style'],
         'br' => [],
-        'em' => [],
-        'i' => [],
-        'strong' => [],
-        'u' => [],
+        'code' => ['style'],
+        'del' => ['style'],
+        'div' => ['style'],
+        'em' => ['style'],
+        'i' => ['style'],
+        'ins' => ['style'],
+        'kbd' => ['style'],
+        'li' => ['style'],
+        'mark' => ['style'],
+        'ol' => ['style'],
+        'pre' => ['style'],
+        'q' => ['cite', 'style'],
+        'small' => ['style'],
+        'span' => ['style'],
+        'strong' => ['style'],
+        'style' => ['type'],
+        'sub' => ['style'],
+        'sup' => ['style'],
+        'u' => ['style'],
+        'ul' => ['style'],
     ];
 
     sanitize_paragraph_node($root, $allowed);
@@ -1061,7 +1293,7 @@ function sanitize_paragraph_node(DOMNode $node, array $allowed): void
 
         $tag = strtolower($child->nodeName);
         if (!isset($allowed[$tag])) {
-            if (in_array($tag, ['script', 'style', 'iframe', 'object', 'embed', 'svg', 'math', 'template'], true)) {
+            if (in_array($tag, ['script', 'iframe', 'object', 'embed', 'svg', 'math', 'template'], true)) {
                 $node->removeChild($child);
                 continue;
             }
@@ -1088,6 +1320,30 @@ function sanitize_paragraph_node(DOMNode $node, array $allowed): void
             }
         }
 
+        if ($child->hasAttribute('style')) {
+            $style = sanitize_inline_css($child->getAttribute('style'));
+            if ($style === '') {
+                $child->removeAttribute('style');
+            } else {
+                $child->setAttribute('style', $style);
+            }
+        }
+
+        if ($tag === 'style') {
+            $css = sanitize_stylesheet_css($child->textContent);
+            if ($css === '') {
+                $node->removeChild($child);
+                continue;
+            }
+
+            while ($child->firstChild !== null) {
+                $child->removeChild($child->firstChild);
+            }
+            $child->appendChild($child->ownerDocument->createTextNode($css));
+            $child->setAttribute('type', 'text/css');
+            continue;
+        }
+
         if ($tag === 'a' && $child->hasAttribute('href')) {
             $href = trim(html_entity_decode($child->getAttribute('href'), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
             if (!is_safe_story_href($href)) {
@@ -1095,8 +1351,123 @@ function sanitize_paragraph_node(DOMNode $node, array $allowed): void
             } else {
                 $child->setAttribute('href', $href);
             }
+
+            if ($child->hasAttribute('target')) {
+                $target = strtolower(trim($child->getAttribute('target')));
+                if (!in_array($target, ['_blank', '_self'], true)) {
+                    $child->removeAttribute('target');
+                } else {
+                    $child->setAttribute('target', $target);
+                }
+            }
+
+            if (strtolower((string) $child->getAttribute('target')) === '_blank') {
+                $child->setAttribute('rel', 'noopener noreferrer');
+            } elseif ($child->hasAttribute('rel')) {
+                $rel = trim(preg_replace('/[^a-z0-9\-\s]+/iu', ' ', $child->getAttribute('rel')) ?? '');
+                if ($rel === '') {
+                    $child->removeAttribute('rel');
+                } else {
+                    $child->setAttribute('rel', $rel);
+                }
+            }
         }
     }
+}
+
+/**
+ * Sanitize allowlisted inline CSS declarations.
+ */
+function sanitize_inline_css(string $css): string
+{
+    $css = preg_replace('#/\*.*?\*/#s', '', $css) ?? $css;
+    $allowed_properties = array_fill_keys([
+        'background', 'background-color', 'border', 'border-color', 'border-radius',
+        'border-style', 'border-width', 'color', 'font-family', 'font-size',
+        'font-style', 'font-weight', 'letter-spacing', 'line-height', 'list-style',
+        'list-style-position', 'list-style-type', 'margin', 'margin-left', 'margin-right',
+        'padding', 'padding-left', 'padding-right', 'text-align', 'text-decoration',
+        'text-transform', 'white-space',
+    ], true);
+
+    $clean = [];
+    foreach (preg_split('/;(?![^()]*\))/u', $css) ?: [] as $declaration) {
+        if (!str_contains($declaration, ':')) {
+            continue;
+        }
+
+        [$property, $value] = explode(':', $declaration, 2);
+        $property = strtolower(trim($property));
+        $value = trim($value);
+
+        if ($property === '' || $value === '' || !isset($allowed_properties[$property])) {
+            continue;
+        }
+
+        $safe_value = sanitize_inline_css_value($value);
+        if ($safe_value === '') {
+            continue;
+        }
+
+        $clean[] = $property . ': ' . $safe_value;
+    }
+
+    return implode('; ', $clean);
+}
+
+/**
+ * Sanitize embedded stylesheet CSS.
+ */
+function sanitize_stylesheet_css(string $css): string
+{
+    $css = preg_replace('#/\*.*?\*/#s', '', $css) ?? $css;
+    $rules = [];
+
+    if (preg_match_all('/([^{}]+)\{([^{}]*)\}/u', $css, $matches, PREG_SET_ORDER) === false) {
+        return '';
+    }
+
+    foreach ($matches as $match) {
+        $selector = trim($match[1]);
+        $declarations = trim($match[2]);
+        if ($selector === '' || preg_match('/[@<>]/', $selector) === 1) {
+            continue;
+        }
+
+        if (preg_match('/^[A-Za-z0-9\s\.\#\-\_\>\+\~\:\,\*\[\]\=\"\'\(\)]+$/', $selector) !== 1) {
+            continue;
+        }
+
+        $safe_declarations = sanitize_inline_css($declarations);
+        if ($safe_declarations === '') {
+            continue;
+        }
+
+        $rules[] = $selector . ' { ' . $safe_declarations . '; }';
+    }
+
+    return implode("\n", $rules);
+}
+
+/**
+ * Sanitize a single inline CSS value.
+ */
+function sanitize_inline_css_value(string $value): string
+{
+    $value = trim($value);
+    if ($value === '') {
+        return '';
+    }
+
+    if (preg_match('/(?:expression\s*\(|javascript:|vbscript:|data:|url\s*\(|@import|behavior\s*:|-moz-binding)/iu', $value) === 1) {
+        return '';
+    }
+
+    if (preg_match('/[{}<>]/u', $value) === 1) {
+        return '';
+    }
+
+    return preg_replace('/\s+/u', ' ', $value) ?? '';
 }
 
 /**
