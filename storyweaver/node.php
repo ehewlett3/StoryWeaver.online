@@ -173,7 +173,7 @@ if ($user && $is_root_node) {
                 <span><?= h($node['title']) ?></span>
             <?php endif; ?>
             <?php if ($node['choice_taken'] !== ''): ?>
-                › <span class="sw-text-muted">"<?= h($node['choice_taken']) ?>"</span>
+                › <span class="sw-text-muted"><?= h($node['choice_taken']) ?></span>
             <?php endif; ?>
         </nav>
 

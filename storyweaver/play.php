@@ -198,7 +198,7 @@ function handle_continue_choice(): void
     if ($key_record !== null) {
         try {
             $key_record = api_key_prepare_for_use($key_record);
-            $prompt_bundle = build_continuation_prompt_bundle($story_id, $parent_node_id, $chosen, $check_q, $user);
+            $prompt_bundle = build_continuation_prompt_bundle($story_id, $parent_node_id, $chosen, $check_q, $user, $key_record);
 
             $provider = play_ai_provider($key_record, $user);
             $raw_response = $provider->generateText($prompt_bundle['system_prompt'], $prompt_bundle['story_context']);

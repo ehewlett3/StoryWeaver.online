@@ -398,7 +398,7 @@ function handle_generate_node(): void
 
     $prompt_bundle = $is_opening
         ? build_opening_prompt_bundle($title, $scenario, $user)
-        : build_continuation_prompt_bundle($story_id, $parent_node_id, $choice_text, $check_quarantine, $user);
+        : build_continuation_prompt_bundle($story_id, $parent_node_id, $choice_text, $check_quarantine, $user, $key_record);
     $system_prompt = $prompt_bundle['system_prompt'];
     $story_context = $prompt_bundle['story_context'];
 
@@ -444,6 +444,11 @@ function handle_generate_node(): void
             } catch (RuntimeException $e) {
                 json_error($e->getMessage(), 500);
             }
+            $prompt_bundle = $is_opening
+                ? build_opening_prompt_bundle($title, $scenario, $user)
+                : build_continuation_prompt_bundle($story_id, $parent_node_id, $choice_text, $check_quarantine, $user, $active_key);
+            $system_prompt = $prompt_bundle['system_prompt'];
+            $story_context = $prompt_bundle['story_context'];
             $provider     = api_ai_provider($active_key, $user);
             $last_error   = '';
             $raw_response = '';
@@ -607,7 +612,7 @@ function handle_regenerate_node(): void
         if ($choice_taken === '') {
             json_error('This page is missing the choice text needed for regeneration.', 400);
         }
-        $prompt_bundle = build_continuation_prompt_bundle($story_id, $node['parent_id'], $choice_taken, true, $user);
+        $prompt_bundle = build_continuation_prompt_bundle($story_id, $node['parent_id'], $choice_taken, true, $user, $key_record);
     }
 
     $system_prompt = $prompt_bundle['system_prompt'];
@@ -649,6 +654,11 @@ function handle_regenerate_node(): void
                 $active_key = api_key_prepare_for_use($fallback);
             } catch (RuntimeException $e) {
                 json_error($e->getMessage(), 500);
+            }
+            if (!$is_root) {
+                $prompt_bundle = build_continuation_prompt_bundle($story_id, $node['parent_id'], $choice_taken, true, $user, $active_key);
+                $system_prompt = $prompt_bundle['system_prompt'];
+                $story_context = append_story_regeneration_guidance($prompt_bundle['story_context'], $steer_prompt);
             }
             $provider = api_ai_provider($active_key, $user);
             $last_error = '';
@@ -782,7 +792,9 @@ function handle_regenerate_pending_choices(): void
         $node_id,
         $pending_choice_count,
         $locked_choices,
-        true
+        true,
+        $user,
+        $key_record
     );
     $system_prompt = $prompt_bundle['system_prompt'];
     $story_context = append_story_regeneration_guidance($prompt_bundle['story_context'], $steer_prompt);
@@ -826,6 +838,17 @@ function handle_regenerate_pending_choices(): void
                 json_error($e->getMessage(), 500);
             }
 
+            $prompt_bundle = build_pending_choices_prompt_bundle(
+                $story_id,
+                $node_id,
+                $pending_choice_count,
+                $locked_choices,
+                true,
+                $user,
+                $active_key
+            );
+            $system_prompt = $prompt_bundle['system_prompt'];
+            $story_context = append_story_regeneration_guidance($prompt_bundle['story_context'], $steer_prompt);
             $provider = api_ai_provider($active_key, $user);
             $last_error = '';
             $raw_response = '';
@@ -985,7 +1008,7 @@ function handle_stream_regenerate_node(): void
             sse_event('error', ['error' => 'This page is missing the choice text needed for regeneration.']);
             exit;
         }
-        $prompt_bundle = build_continuation_prompt_bundle($story_id, $node['parent_id'], $choice_taken, true, $user);
+        $prompt_bundle = build_continuation_prompt_bundle($story_id, $node['parent_id'], $choice_taken, true, $user, $key_record);
     }
 
     $system_prompt = $prompt_bundle['system_prompt'];
@@ -1020,6 +1043,11 @@ function handle_stream_regenerate_node(): void
                 } catch (RuntimeException $e3) {
                     sse_event('error', ['error' => $e3->getMessage()]);
                     exit;
+                }
+                if (!$is_root) {
+                    $prompt_bundle = build_continuation_prompt_bundle($story_id, $node['parent_id'], $choice_taken, true, $user, $active_key);
+                    $system_prompt = $prompt_bundle['system_prompt'];
+                    $story_context = append_story_regeneration_guidance($prompt_bundle['story_context'], $steer_prompt);
                 }
                 $provider = api_ai_provider($active_key, $user);
                 sse_event('info', ['key_label' => $active_key['label'] ?? 'Unknown', 'fallback' => true]);
@@ -1290,7 +1318,7 @@ function handle_stream_generate_node(): void
 
     $prompt_bundle = $is_opening
         ? build_opening_prompt_bundle($title, $scenario, $user)
-        : build_continuation_prompt_bundle($story_id, $parent_node_id, $choice_text, $check_quarantine, $user);
+        : build_continuation_prompt_bundle($story_id, $parent_node_id, $choice_text, $check_quarantine, $user, $key_record);
     $system_prompt = $prompt_bundle['system_prompt'];
     $story_context = $prompt_bundle['story_context'];
 
@@ -1328,6 +1356,11 @@ function handle_stream_generate_node(): void
                     sse_event('error', ['error' => $e3->getMessage()]);
                     exit;
                 }
+                $prompt_bundle = $is_opening
+                    ? build_opening_prompt_bundle($title, $scenario, $user)
+                    : build_continuation_prompt_bundle($story_id, $parent_node_id, $choice_text, $check_quarantine, $user, $active_key);
+                $system_prompt = $prompt_bundle['system_prompt'];
+                $story_context = $prompt_bundle['story_context'];
                 $provider   = api_ai_provider($active_key, $user);
                 sse_event('info', ['key_label' => $active_key['label'] ?? 'Unknown', 'fallback' => true]);
 
@@ -2759,6 +2792,7 @@ function handle_preview_prompt(): void
     $story_id       = trim($input['story_id'] ?? '');
     $parent_node_id = trim($input['parent_node_id'] ?? '');
     $choice_text    = trim($input['choice_text'] ?? '(example choice)');
+    $key_id         = trim((string) ($input['key_id'] ?? ''));
     $title          = normalize_story_title((string) ($input['title'] ?? ''));
     $scenario       = normalize_scenario_essentials((string) ($input['scenario_essentials'] ?? ''));
 
@@ -2773,18 +2807,38 @@ function handle_preview_prompt(): void
     $system_prompt = '';
     $story_context = '';
     $image_prompt  = '';
+    $preview_key = null;
+    $prepared_preview_key = null;
+
+    if ($key_id !== '' && validate_id($key_id, 'key_')) {
+        $preview_key = api_key_find_by_id($key_id);
+        if ($preview_key === null || $preview_key['status'] !== 'active') {
+            $preview_key = null;
+        } elseif (($key_error = api_key_access_error($preview_key, $user)) !== null) {
+            json_error($key_error, 403);
+        }
+    } else {
+        $preview_key = api_key_select_for_user($user['id']);
+    }
+
+    if ($preview_key !== null) {
+        try {
+            $prepared_preview_key = api_key_prepare_for_use($preview_key);
+        } catch (RuntimeException $e) {
+            json_error($e->getMessage(), 500);
+        }
+    }
 
     if ($is_opening) {
         $prompt_bundle = build_opening_prompt_bundle($title, $scenario, $user);
         $system_prompt = $prompt_bundle['system_prompt'];
         $story_context = $prompt_bundle['story_context'];
     } elseif ($story_id !== '' && $parent_node_id !== '') {
-        $prompt_bundle = build_continuation_prompt_bundle($story_id, $parent_node_id, $choice_text, true, $user);
+        $prompt_bundle = build_continuation_prompt_bundle($story_id, $parent_node_id, $choice_text, true, $user, $prepared_preview_key);
         $system_prompt = $prompt_bundle['system_prompt'];
         $story_context = $prompt_bundle['story_context'];
 
         // Use any available key to build the enriched image prompt (same logic as generation).
-        $preview_key     = api_key_select_for_user($user['id']);
         $context_summary = ($preview_key !== null)
             ? build_image_context_summary($story_id, $parent_node_id, $preview_key, $user, true)
             : '';

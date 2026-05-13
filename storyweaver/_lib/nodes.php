@@ -200,22 +200,22 @@ function story_update_title(string $story_id, string $title, string $updated_by 
 }
 
 /**
- * Find the most recently added node in a story.
+ * Get metadata for the most recently added node in a story.
  *
  * Falls back to file modification time when a node lacks a parseable timestamp.
  *
  * @param string $story_id Story ID.
  * @param bool   $include_quarantine Whether to include quarantined nodes.
- * @return string|null Latest node ID, or null if none were found.
+ * @return array<string, mixed>|null Latest node metadata, or null if none were found.
  */
-function story_find_latest_node(string $story_id, bool $include_quarantine = false): ?string
+function story_latest_node_info(string $story_id, bool $include_quarantine = false): ?array
 {
     $dirs = [STORIES_DIR . '/' . $story_id];
     if ($include_quarantine) {
         $dirs[] = QUARANTINE_DIR . '/' . $story_id;
     }
 
-    $latest_id = null;
+    $latest = null;
     $latest_sort = PHP_INT_MIN;
     $latest_mtime = PHP_INT_MIN;
 
@@ -239,18 +239,36 @@ function story_find_latest_node(string $story_id, bool $include_quarantine = fal
             $sort_value = $created_at !== false ? $created_at : $mtime;
 
             if (
-                $latest_id === null
+                $latest === null
                 || $sort_value > $latest_sort
                 || ($sort_value === $latest_sort && $mtime > $latest_mtime)
             ) {
-                $latest_id = $node_id;
+                $latest = [
+                    'node_id' => $node_id,
+                    'created_at' => (string) ($node['created_at'] ?? ''),
+                    'author_id' => (string) ($node['author_id'] ?? ''),
+                    'location' => $location,
+                ];
                 $latest_sort = $sort_value;
                 $latest_mtime = $mtime;
             }
         }
     }
 
-    return $latest_id;
+    return $latest;
+}
+
+/**
+ * Find the most recently added node in a story.
+ *
+ * @param string $story_id Story ID.
+ * @param bool   $include_quarantine Whether to include quarantined nodes.
+ * @return string|null Latest node ID, or null if none were found.
+ */
+function story_find_latest_node(string $story_id, bool $include_quarantine = false): ?string
+{
+    $latest = story_latest_node_info($story_id, $include_quarantine);
+    return is_array($latest) ? (string) ($latest['node_id'] ?? '') ?: null : null;
 }
 
 /**
@@ -452,7 +470,7 @@ function node_parse_html(string $html, string $location = 'stories'): array
 
     foreach ($meta_map as $meta_name => $key) {
         if (preg_match('/name="' . preg_quote($meta_name, '/') . '"\s+content="([^"]*)"/i', $html, $m)) {
-            $data[$key] = $m[1];
+            $data[$key] = html_entity_decode($m[1], ENT_QUOTES | ENT_HTML5, 'UTF-8');
         }
     }
 

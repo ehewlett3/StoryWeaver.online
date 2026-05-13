@@ -3,17 +3,25 @@
  * StoryWeaver — Context reconstruction (§3.3) and prompt assembly (§3.2).
  *
  * Walks the parent chain of a story node to build a narrative context
- * string for AI text generation. Handles truncation from the oldest
- * end when context exceeds MAX_CONTEXT_CHARS.
+ * string for AI text generation. Applies model-aware compression when
+ * the full history would exceed the selected model's usable prompt budget.
  */
 
 require_once __DIR__ . '/helpers.php';
 require_once __DIR__ . '/nodes.php';
 require_once __DIR__ . '/ai_settings.php';
+require_once __DIR__ . '/AIProvider.php';
 
 /** Maximum total characters for the assembled context string. */
 define('MAX_CONTEXT_CHARS', 12000);
 define('SCENARIO_ESSENTIALS_MAX_CHARS', 4000);
+define('PROMPT_CHARS_PER_TOKEN', 4);
+define('DEFAULT_MODEL_CONTEXT_TOKENS', 32000);
+define('DEFAULT_CONTEXT_OUTPUT_RESERVE_TOKENS', 2048);
+define('DEFAULT_CONTEXT_MARGIN_TOKENS', 1024);
+define('MIN_SUMMARIZED_CONTEXT_TOKENS', 384);
+define('MAX_SUMMARY_OUTPUT_TOKENS', 1024);
+define('MAX_SUMMARY_INPUT_TOKENS', 24000);
 
 /**
  * Get the effective story-generation system prompt for the active user.
@@ -47,6 +55,291 @@ function story_get_scenario_essentials(string $story_id): string
 function normalize_scenario_essentials(string $scenario_essentials): string
 {
     return trim(mb_substr($scenario_essentials, 0, SCENARIO_ESSENTIALS_MAX_CHARS));
+}
+
+/**
+ * Approximate token count for budgeting prompt text without a model tokenizer.
+ */
+function estimate_prompt_tokens(string $text): int
+{
+    $length = mb_strlen($text, 'UTF-8');
+    if ($length <= 0) {
+        return 0;
+    }
+
+    return (int) ceil($length / PROMPT_CHARS_PER_TOKEN);
+}
+
+/**
+ * Convert an approximate token budget to a character budget.
+ */
+function prompt_tokens_to_chars(int $tokens): int
+{
+    return max(0, $tokens * PROMPT_CHARS_PER_TOKEN);
+}
+
+/**
+ * Trim text to an approximate token budget.
+ */
+function trim_text_to_token_budget(string $text, int $token_budget): string
+{
+    if ($token_budget <= 0) {
+        return '';
+    }
+
+    return trim(mb_strimwidth($text, 0, prompt_tokens_to_chars($token_budget), '…', 'UTF-8'));
+}
+
+/**
+ * Estimate the selected model's total context window in tokens.
+ */
+function estimate_model_context_window_tokens(?array $key_record = null): int
+{
+    $provider = strtolower((string) ($key_record['provider'] ?? ''));
+    $model = strtolower((string) ($key_record['model_text'] ?? ''));
+
+    if ($provider === 'anthropic' || str_contains($model, 'claude')) {
+        return 200000;
+    }
+
+    if ($provider === 'gemini' || str_contains($model, 'gemini')) {
+        return 128000;
+    }
+
+    if (
+        str_contains($model, 'gpt-5')
+        || str_contains($model, 'gpt-4.1')
+        || str_contains($model, 'gpt-4o')
+        || preg_match('/\bo[134]\b/', $model) === 1
+    ) {
+        return 128000;
+    }
+
+    if (str_contains($model, 'gpt-4')) {
+        return 32000;
+    }
+
+    if (str_contains($model, 'gpt-3.5')) {
+        return 16000;
+    }
+
+    if (
+        $provider === 'ollama'
+        || str_contains($model, 'llama')
+        || str_contains($model, 'mistral')
+        || str_contains($model, 'mixtral')
+        || str_contains($model, 'qwen')
+        || str_contains($model, 'gemma')
+        || str_contains($model, 'phi')
+    ) {
+        return 32000;
+    }
+
+    return DEFAULT_MODEL_CONTEXT_TOKENS;
+}
+
+/**
+ * Reserve output tokens so the prompt budget leaves room for the model's reply.
+ */
+function estimate_prompt_output_reserve_tokens(?array $user = null): int
+{
+    $generation_options = ai_generation_options_for_user($user);
+    $reserve = (int) ($generation_options['max_tokens'] ?? 0);
+    if ($reserve <= 0) {
+        $reserve = DEFAULT_CONTEXT_OUTPUT_RESERVE_TOKENS;
+    }
+
+    return max(512, $reserve);
+}
+
+/**
+ * Resolve the available token budget for the story-context user message.
+ */
+function resolve_story_context_budget_tokens(string $system_prompt, ?array $key_record = null, ?array $user = null): int
+{
+    $context_window = estimate_model_context_window_tokens($key_record);
+    $system_tokens = estimate_prompt_tokens($system_prompt);
+    $output_reserve = min(
+        estimate_prompt_output_reserve_tokens($user),
+        max(1024, (int) floor($context_window * 0.25))
+    );
+
+    $budget = $context_window - $system_tokens - $output_reserve - DEFAULT_CONTEXT_MARGIN_TOKENS;
+    return max(2048, $budget);
+}
+
+/**
+ * Format one reconstructed context entry.
+ */
+function format_context_entry(array $entry): string
+{
+    $parts = [];
+    if (($entry['choice_taken'] ?? '') !== '') {
+        $parts[] = '> Player chose: ' . $entry['choice_taken'];
+    }
+    if (($entry['paragraphs'] ?? '') !== '') {
+        $parts[] = $entry['paragraphs'];
+    }
+
+    return trim(implode("\n", $parts));
+}
+
+/**
+ * Render context entries to chronological plain text blocks.
+ *
+ * @param array<int, array{paragraphs:string, choice_taken:string}> $entries
+ */
+function render_context_entries_text(array $entries): string
+{
+    $blocks = [];
+    foreach ($entries as $entry) {
+        $block = format_context_entry($entry);
+        if ($block !== '') {
+            $blocks[] = $block;
+        }
+    }
+
+    return implode("\n\n", $blocks);
+}
+
+/**
+ * Split context entries into chronological chunks that fit an approximate input budget.
+ *
+ * @param array<int, array{paragraphs:string, choice_taken:string}> $entries
+ * @return array<int, array<int, array{paragraphs:string, choice_taken:string}>>
+ */
+function split_context_entries_into_chunks(array $entries, int $max_tokens): array
+{
+    $chunks = [];
+    $current_chunk = [];
+    $current_tokens = 0;
+
+    foreach ($entries as $entry) {
+        $entry_tokens = estimate_prompt_tokens(format_context_entry($entry)) + 12;
+        if (!empty($current_chunk) && ($current_tokens + $entry_tokens) > $max_tokens) {
+            $chunks[] = $current_chunk;
+            $current_chunk = [];
+            $current_tokens = 0;
+        }
+
+        $current_chunk[] = $entry;
+        $current_tokens += $entry_tokens;
+    }
+
+    if (!empty($current_chunk)) {
+        $chunks[] = $current_chunk;
+    }
+
+    return $chunks;
+}
+
+/**
+ * Deterministically compress older history when AI summarization is unavailable.
+ *
+ * @param array<int, array{paragraphs:string, choice_taken:string}> $entries
+ */
+function fallback_story_history_summary(array $entries, int $summary_budget_tokens): string
+{
+    $segments = [];
+    foreach ($entries as $entry) {
+        if (($entry['choice_taken'] ?? '') !== '') {
+            $segments[] = 'Player chose: ' . $entry['choice_taken'] . '.';
+        }
+
+        if (($entry['paragraphs'] ?? '') !== '') {
+            $segments[] = trim(mb_strimwidth($entry['paragraphs'], 0, 260, '…', 'UTF-8'));
+        }
+    }
+
+    return trim_text_to_token_budget(implode("\n", $segments), $summary_budget_tokens);
+}
+
+/**
+ * Summarize one chronological history chunk using the selected text model.
+ *
+ * @param array<int, array{paragraphs:string, choice_taken:string}> $entries
+ */
+function summarize_story_history_chunk(array $entries, array $key_record, int $summary_budget_tokens): string
+{
+    $context_text = render_context_entries_text($entries);
+    if ($context_text === '') {
+        return '';
+    }
+
+    $system = 'You are a continuity assistant for a branching interactive fiction story.';
+    $prompt = "Here is the earlier part of a story in chronological order:\n\n{$context_text}\n\n"
+        . "Write a concise chronological summary for future continuation. Preserve key names, relationships, locations, discoveries, promises, injuries, items, ongoing goals, unresolved threats, and lasting consequences. "
+        . "Keep the sequence of events clear. Output plain prose only.";
+
+    $provider = new AIProvider($key_record, [
+        'temperature' => 0.0,
+        'top_p' => 1.0,
+        'max_tokens' => min(MAX_SUMMARY_OUTPUT_TOKENS, max(256, $summary_budget_tokens)),
+    ]);
+
+    $summary = trim($provider->generateText($system, $prompt));
+    return trim_text_to_token_budget($summary, $summary_budget_tokens);
+}
+
+/**
+ * Build a chronological summary of older story history, using AI first and a deterministic fallback if needed.
+ *
+ * @param array<int, array{paragraphs:string, choice_taken:string}> $entries
+ */
+function build_story_history_summary(array $entries, int $summary_budget_tokens, ?array $key_record = null): string
+{
+    if (empty($entries) || $summary_budget_tokens <= 0) {
+        return '';
+    }
+
+    if ($key_record === null || empty($key_record['model_text'])) {
+        return fallback_story_history_summary($entries, $summary_budget_tokens);
+    }
+
+    $input_chunk_tokens = min(
+        MAX_SUMMARY_INPUT_TOKENS,
+        max(4000, (int) floor(estimate_model_context_window_tokens($key_record) * 0.35))
+    );
+    $chunks = split_context_entries_into_chunks($entries, $input_chunk_tokens);
+    $chunk_summaries = [];
+
+    foreach ($chunks as $chunk) {
+        try {
+            $chunk_summaries[] = summarize_story_history_chunk(
+                $chunk,
+                $key_record,
+                min(MAX_SUMMARY_OUTPUT_TOKENS, max(256, (int) floor($summary_budget_tokens / max(1, count($chunks)))))
+            );
+        } catch (RuntimeException $e) {
+            $chunk_summaries[] = fallback_story_history_summary($chunk, max(192, (int) floor($summary_budget_tokens / max(1, count($chunks)))));
+        }
+    }
+
+    $chunk_summaries = array_values(array_filter(array_map('trim', $chunk_summaries), static function ($summary) {
+        return $summary !== '';
+    }));
+
+    if (empty($chunk_summaries)) {
+        return fallback_story_history_summary($entries, $summary_budget_tokens);
+    }
+
+    if (count($chunk_summaries) === 1) {
+        return trim_text_to_token_budget($chunk_summaries[0], $summary_budget_tokens);
+    }
+
+    $combined_entries = [];
+    foreach ($chunk_summaries as $summary) {
+        $combined_entries[] = [
+            'choice_taken' => '',
+            'paragraphs' => $summary,
+        ];
+    }
+
+    try {
+        return summarize_story_history_chunk($combined_entries, $key_record, $summary_budget_tokens);
+    } catch (RuntimeException $e) {
+        return fallback_story_history_summary($combined_entries, $summary_budget_tokens);
+    }
 }
 
 /**
@@ -135,7 +428,12 @@ function truncate_context(array $entries, int $max_chars = MAX_CONTEXT_CHARS): a
  * @param string $scenario_essentials Optional scenario essentials carried forward from the root node.
  * @return string The assembled user message.
  */
-function build_story_prompt(array $entries, string $choice_text, string $scenario_essentials = ''): string
+function build_story_prompt(
+    array $entries,
+    string $choice_text,
+    string $scenario_essentials = '',
+    string $history_summary = ''
+): string
 {
     $parts = [];
 
@@ -145,16 +443,18 @@ function build_story_prompt(array $entries, string $choice_text, string $scenari
         $parts[] = "";
     }
 
+    if ($history_summary !== '') {
+        $parts[] = "[EARLIER STORY SUMMARY]";
+        $parts[] = $history_summary;
+        $parts[] = "";
+    }
+
     $parts[] = "[STORY CONTEXT — oldest to newest]";
 
     foreach ($entries as $entry) {
-        // The choice_taken is what the player chose to arrive at this node,
-        // so it must appear before this node's paragraphs.
-        if ($entry['choice_taken'] !== '') {
-            $parts[] = "> Player chose: " . $entry['choice_taken'];
-        }
-        if ($entry['paragraphs'] !== '') {
-            $parts[] = $entry['paragraphs'];
+        $entry_text = format_context_entry($entry);
+        if ($entry_text !== '') {
+            $parts[] = $entry_text;
         }
     }
 
@@ -162,6 +462,111 @@ function build_story_prompt(array $entries, string $choice_text, string $scenari
     $parts[] = "> Player chose: " . $choice_text;
 
     return implode("\n", $parts);
+}
+
+/**
+ * Build the current-story prompt for pending-choice regeneration.
+ *
+ * @param array<int, array{paragraphs:string, choice_taken:string}> $entries
+ * @param array<int, string> $locked_choices
+ */
+function build_pending_choices_prompt(
+    array $entries,
+    string $scenario_essentials,
+    int $pending_choice_count,
+    array $locked_choices = [],
+    string $history_summary = ''
+): string {
+    $parts = [];
+    if ($scenario_essentials !== '') {
+        $parts[] = "[SCENARIO ESSENTIALS]";
+        $parts[] = $scenario_essentials;
+        $parts[] = '';
+    }
+
+    if ($history_summary !== '') {
+        $parts[] = "[EARLIER STORY SUMMARY]";
+        $parts[] = $history_summary;
+        $parts[] = '';
+    }
+
+    $parts[] = "[CURRENT STORY CONTEXT — oldest to newest]";
+    foreach ($entries as $entry) {
+        $entry_text = format_context_entry($entry);
+        if ($entry_text !== '') {
+            $parts[] = $entry_text;
+        }
+    }
+
+    $parts[] = '';
+    $parts[] = "[TASK]";
+    $parts[] = "Generate exactly {$pending_choice_count} new pending choices for what could happen next from the current page.";
+    if (!empty($locked_choices)) {
+        $parts[] = "These existing choices are already linked to child pages and must remain distinct:";
+        foreach ($locked_choices as $choice_text) {
+            $parts[] = "- " . $choice_text;
+        }
+    }
+    $parts[] = "Do not repeat or closely paraphrase any locked choice.";
+
+    return implode("\n", $parts);
+}
+
+/**
+ * Compress reconstructed entries so the final prompt fits the selected model budget.
+ *
+ * @param array<int, array{paragraphs:string, choice_taken:string}> $entries
+ * @param callable(array<int, array{paragraphs:string, choice_taken:string}>, string): string $prompt_builder
+ * @return array{entries: array<int, array{paragraphs:string, choice_taken:string}>, history_summary: string}
+ */
+function compress_story_history_for_prompt(
+    array $entries,
+    int $story_budget_tokens,
+    callable $prompt_builder,
+    ?array $key_record = null
+): array {
+    $full_prompt = $prompt_builder($entries, '');
+    if (estimate_prompt_tokens($full_prompt) <= $story_budget_tokens) {
+        return [
+            'entries' => $entries,
+            'history_summary' => '',
+        ];
+    }
+
+    $summary_heading_tokens = estimate_prompt_tokens("[EARLIER STORY SUMMARY]\n");
+    $split_index = 0;
+
+    while ($split_index <= count($entries)) {
+        $older_entries = array_slice($entries, 0, $split_index);
+        $recent_entries = array_slice($entries, $split_index);
+
+        if (empty($older_entries)) {
+            if (estimate_prompt_tokens($prompt_builder($recent_entries, '')) <= $story_budget_tokens) {
+                return [
+                    'entries' => $recent_entries,
+                    'history_summary' => '',
+                ];
+            }
+        } else {
+            $base_tokens = estimate_prompt_tokens($prompt_builder($recent_entries, ''));
+            $summary_budget_tokens = $story_budget_tokens - $base_tokens - $summary_heading_tokens;
+            if ($summary_budget_tokens >= MIN_SUMMARIZED_CONTEXT_TOKENS) {
+                $history_summary = build_story_history_summary($older_entries, $summary_budget_tokens, $key_record);
+                $history_summary = trim_text_to_token_budget($history_summary, $summary_budget_tokens);
+                return [
+                    'entries' => $recent_entries,
+                    'history_summary' => $history_summary,
+                ];
+            }
+        }
+
+        $split_index++;
+    }
+
+    return [
+        'entries' => [],
+        'history_summary' => build_story_history_summary($entries, max(MIN_SUMMARIZED_CONTEXT_TOKENS, $story_budget_tokens - $summary_heading_tokens), $key_record),
+    ];
 }
 
 /**
@@ -184,16 +589,36 @@ function build_opening_prompt_bundle(string $title, string $scenario_essentials 
  * @param bool $check_quarantine Also read quarantined nodes when building context.
  * @return array{scenario_essentials: string, system_prompt: string, story_context: string}
  */
-function build_continuation_prompt_bundle(string $story_id, string $parent_node_id, string $choice_text, bool $check_quarantine = false, ?array $user = null): array
+function build_continuation_prompt_bundle(
+    string $story_id,
+    string $parent_node_id,
+    string $choice_text,
+    bool $check_quarantine = false,
+    ?array $user = null,
+    ?array $key_record = null
+): array
 {
     $scenario_essentials = story_get_scenario_essentials($story_id);
+    $system_prompt = get_system_prompt($user);
     $entries = reconstruct_context($story_id, $parent_node_id, $check_quarantine);
-    $entries = truncate_context($entries);
+    $compressed = compress_story_history_for_prompt(
+        $entries,
+        resolve_story_context_budget_tokens($system_prompt, $key_record, $user),
+        static function (array $prompt_entries, string $history_summary) use ($choice_text, $scenario_essentials): string {
+            return build_story_prompt($prompt_entries, $choice_text, $scenario_essentials, $history_summary);
+        },
+        $key_record
+    );
 
     return [
         'scenario_essentials' => $scenario_essentials,
-        'system_prompt'       => get_system_prompt($user),
-        'story_context'       => build_story_prompt($entries, $choice_text, $scenario_essentials),
+        'system_prompt'       => $system_prompt,
+        'story_context'       => build_story_prompt(
+            $compressed['entries'],
+            $choice_text,
+            $scenario_essentials,
+            $compressed['history_summary']
+        ),
     ];
 }
 
@@ -203,44 +628,44 @@ function build_continuation_prompt_bundle(string $story_id, string $parent_node_
  * @param array<int, string> $locked_choices Choices that already link to child pages and must stay untouched.
  * @return array{scenario_essentials: string, system_prompt: string, story_context: string}
  */
-function build_pending_choices_prompt_bundle(string $story_id, string $node_id, int $pending_choice_count, array $locked_choices = [], bool $check_quarantine = false): array
+function build_pending_choices_prompt_bundle(
+    string $story_id,
+    string $node_id,
+    int $pending_choice_count,
+    array $locked_choices = [],
+    bool $check_quarantine = false,
+    ?array $user = null,
+    ?array $key_record = null
+): array
 {
     $scenario_essentials = story_get_scenario_essentials($story_id);
+    $system_prompt = get_pending_choices_system_prompt($pending_choice_count);
     $entries = reconstruct_context($story_id, $node_id, $check_quarantine);
-    $entries = truncate_context($entries);
-
-    $parts = [];
-    if ($scenario_essentials !== '') {
-        $parts[] = "[SCENARIO ESSENTIALS]";
-        $parts[] = $scenario_essentials;
-        $parts[] = '';
-    }
-
-    $parts[] = "[CURRENT STORY CONTEXT — oldest to newest]";
-    foreach ($entries as $entry) {
-        if ($entry['choice_taken'] !== '') {
-            $parts[] = "> Player chose: " . $entry['choice_taken'];
-        }
-        if ($entry['paragraphs'] !== '') {
-            $parts[] = $entry['paragraphs'];
-        }
-    }
-
-    $parts[] = '';
-    $parts[] = "[TASK]";
-    $parts[] = "Generate exactly {$pending_choice_count} new pending choices for what could happen next from the current page.";
-    if (!empty($locked_choices)) {
-        $parts[] = "These existing choices are already linked to child pages and must remain distinct:";
-        foreach ($locked_choices as $choice_text) {
-            $parts[] = "- " . $choice_text;
-        }
-    }
-    $parts[] = "Do not repeat or closely paraphrase any locked choice.";
+    $compressed = compress_story_history_for_prompt(
+        $entries,
+        resolve_story_context_budget_tokens($system_prompt, $key_record, $user),
+        static function (array $prompt_entries, string $history_summary) use ($scenario_essentials, $pending_choice_count, $locked_choices): string {
+            return build_pending_choices_prompt(
+                $prompt_entries,
+                $scenario_essentials,
+                $pending_choice_count,
+                $locked_choices,
+                $history_summary
+            );
+        },
+        $key_record
+    );
 
     return [
         'scenario_essentials' => $scenario_essentials,
-        'system_prompt' => get_pending_choices_system_prompt($pending_choice_count),
-        'story_context' => implode("\n", $parts),
+        'system_prompt' => $system_prompt,
+        'story_context' => build_pending_choices_prompt(
+            $compressed['entries'],
+            $scenario_essentials,
+            $pending_choice_count,
+            $locked_choices,
+            $compressed['history_summary']
+        ),
     ];
 }
 

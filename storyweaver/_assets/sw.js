@@ -1702,6 +1702,18 @@ document.addEventListener('DOMContentLoaded', function () {
             if (cancelEditBtn) cancelEditBtn.hidden = false;
             clearModelSelects();
             setKeyFormStatus('Editing "' + (keyData.label || 'API key') + '".', false);
+
+            var scrollTarget = headingEl || addKeyForm;
+            if (scrollTarget && typeof scrollTarget.scrollIntoView === 'function') {
+                scrollTarget.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+            if (keyLabelInput && typeof keyLabelInput.focus === 'function') {
+                try {
+                    keyLabelInput.focus({ preventScroll: true });
+                } catch (err) {
+                    keyLabelInput.focus();
+                }
+            }
         }
 
         function buildKeyPayload() {
@@ -3093,6 +3105,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 story_id:        storyId,
                 parent_node_id:  nodeId,
                 choice_text:     choiceText,
+                key_id:          getSelectedTextKeyId() || '',
                 _csrf_token:     csrfValue
             })
         })

@@ -19,6 +19,21 @@ $user = current_user();
 $base = base_url();
 $can_edit_announcement = $user !== null && ($user['role'] ?? '') === 'admin';
 $can_jump_latest = $user !== null && ($user['role'] ?? '') === 'admin';
+$story_sort_options = [
+    'created' => 'Date created',
+    'updated' => 'Date updated',
+    'title' => 'Title',
+    'author' => 'Author',
+    'pages' => 'Number of pages',
+];
+$story_sort = strtolower(trim((string) ($_GET['sort'] ?? 'created')));
+if (!isset($story_sort_options[$story_sort])) {
+    $story_sort = 'created';
+}
+$story_sort_dir = strtolower(trim((string) ($_GET['dir'] ?? 'desc')));
+if (!in_array($story_sort_dir, ['asc', 'desc'], true)) {
+    $story_sort_dir = 'desc';
+}
 
 /**
  * Convert stored rich-text HTML into a plain-text length-checking string.
@@ -157,6 +172,35 @@ function index_story_card_thumbnail_url(string $root_node_id, string $base_url):
     return $base_url . '/_assets/images/' . basename($images[0]);
 }
 
+/**
+ * Normalize story-card text for sorting.
+ */
+function index_story_sort_text(string $value): string
+{
+    return mb_strtolower(
+        trim(html_entity_decode($value, ENT_QUOTES | ENT_HTML5, 'UTF-8')),
+        'UTF-8'
+    );
+}
+
+/**
+ * Convert a stored node timestamp to a sortable integer.
+ */
+function index_story_sort_timestamp(string $value): int
+{
+    $timestamp = strtotime($value);
+    return $timestamp === false ? 0 : $timestamp;
+}
+
+/**
+ * Format a story-card date label.
+ */
+function index_story_card_date_label(string $value): string
+{
+    $timestamp = strtotime($value);
+    return $timestamp === false ? '' : date('M j, Y', $timestamp);
+}
+
 // ─── Scan stories directory for existing stories ───
 $stories = [];
 $stories_dir = sw_root() . '/stories';
@@ -194,22 +238,67 @@ if (is_dir($stories_dir)) {
             }
         }
 
+        $latest_public = story_latest_node_info($story_id, false);
+        $latest_any = $can_jump_latest ? story_latest_node_info($story_id, true) : null;
+        $created_at = (string) ($root_node['created_at'] ?? '');
+        $updated_at = (string) ($latest_public['created_at'] ?? $created_at);
+
         $stories[] = [
             'story_id' => $story_id,
             'title' => (string) ($root_node['title'] ?? $story_id),
-            'created' => (string) ($root_node['created_at'] ?? ''),
+            'created' => $created_at,
+            'updated' => $updated_at,
             'author' => $author,
             'node_count' => count($nodes),
             'root_node' => $root_node_id,
-            'latest_node' => $can_jump_latest ? story_find_latest_node($story_id, true) : null,
+            'latest_node' => $can_jump_latest ? (string) ($latest_any['node_id'] ?? '') : null,
             'thumbnail_url' => index_story_card_thumbnail_url($root_node_id, $base),
             'snippet' => index_story_card_snippet($root_node),
         ];
     }
 
-    // Sort by creation date, newest first
-    usort($stories, function ($a, $b) {
-        return strcmp($b['created'], $a['created']);
+    usort($stories, function ($a, $b) use ($story_sort, $story_sort_dir) {
+        $comparison = 0;
+
+        switch ($story_sort) {
+            case 'updated':
+                $comparison = index_story_sort_timestamp((string) ($a['updated'] ?? ''))
+                    <=> index_story_sort_timestamp((string) ($b['updated'] ?? ''));
+                break;
+            case 'title':
+                $comparison = strcmp(
+                    index_story_sort_text((string) ($a['title'] ?? '')),
+                    index_story_sort_text((string) ($b['title'] ?? ''))
+                );
+                break;
+            case 'author':
+                $comparison = strcmp(
+                    index_story_sort_text((string) ($a['author'] ?? '')),
+                    index_story_sort_text((string) ($b['author'] ?? ''))
+                );
+                break;
+            case 'pages':
+                $comparison = ((int) ($a['node_count'] ?? 0)) <=> ((int) ($b['node_count'] ?? 0));
+                break;
+            case 'created':
+            default:
+                $comparison = index_story_sort_timestamp((string) ($a['created'] ?? ''))
+                    <=> index_story_sort_timestamp((string) ($b['created'] ?? ''));
+                break;
+        }
+
+        if ($comparison === 0) {
+            $comparison = strcmp(
+                index_story_sort_text((string) ($a['title'] ?? '')),
+                index_story_sort_text((string) ($b['title'] ?? ''))
+            );
+        }
+
+        if ($comparison === 0) {
+            $comparison = strcmp((string) ($a['story_id'] ?? ''), (string) ($b['story_id'] ?? ''));
+        }
+
+        return $story_sort_dir === 'asc' ? $comparison : -$comparison;
     });
 }
 
@@ -318,8 +407,28 @@ if (is_dir($stories_dir)) {
             </section>
         <?php endif; ?>
 
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem;">
-            <h1>Stories</h1>
+        <div class="sw-story-list-toolbar">
+            <div class="sw-story-list-heading">
+                <h1>Stories</h1>
+                <?php if (!empty($stories)): ?>
+                    <form method="GET" action="<?= h(app_url('index')) ?>" class="sw-story-sort-form">
+                        <label for="sw-story-sort" class="sw-story-sort-label">Sort by</label>
+                        <select id="sw-story-sort" name="sort" class="sw-input sw-input-sm">
+                            <?php foreach ($story_sort_options as $sort_value => $sort_label): ?>
+                                <option value="<?= h($sort_value) ?>" <?= $story_sort === $sort_value ? 'selected' : '' ?>>
+                                    <?= h($sort_label) ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                        <label for="sw-story-sort-dir" class="sw-story-sort-label">Order</label>
+                        <select id="sw-story-sort-dir" name="dir" class="sw-input sw-input-sm">
+                            <option value="desc" <?= $story_sort_dir === 'desc' ? 'selected' : '' ?>>Descending</option>
+                            <option value="asc" <?= $story_sort_dir === 'asc' ? 'selected' : '' ?>>Ascending</option>
+                        </select>
+                        <button type="submit" class="sw-btn sw-btn-secondary sw-btn-sm">Apply</button>
+                    </form>
+                <?php endif; ?>
+            </div>
             <button id="sw-new-story-btn" class="sw-btn sw-btn-primary">
                 + Begin New Story
             </button>
@@ -343,19 +452,28 @@ if (is_dir($stories_dir)) {
                             <?php endif; ?>
                             <div class="sw-story-item-body">
                                 <div class="sw-story-item-head">
-                                    <div>
-                                        <div class="sw-story-item-title"><?= h($story['title']) ?></div>
-                                        <div class="sw-story-item-meta">
-                                            by <?= h($story['author']) ?>
-                                            · <?= $story['node_count'] ?> page<?= $story['node_count'] !== 1 ? 's' : '' ?>
-                                        </div>
-                                    </div>
-                                    <div class="sw-story-item-meta">
-                                        <?php if ($story['created']): ?>
-                                            <?= h(date('M j, Y', strtotime($story['created']))) ?>
-                                        <?php endif; ?>
-                                    </div>
-                                </div>
+                                     <div>
+                                         <div class="sw-story-item-title"><?= h($story['title']) ?></div>
+                                         <div class="sw-story-item-meta">
+                                             by <?= h($story['author']) ?>
+                                             · <?= $story['node_count'] ?> page<?= $story['node_count'] !== 1 ? 's' : '' ?>
+                                         </div>
+                                     </div>
+                                     <div class="sw-story-item-date-group">
+                                         <?php $created_label = index_story_card_date_label((string) ($story['created'] ?? '')); ?>
+                                         <?php if ($created_label !== ''): ?>
+                                             <div class="sw-story-item-meta">
+                                                 <span class="sw-story-item-meta-label">Created:</span> <?= h($created_label) ?>
+                                             </div>
+                                         <?php endif; ?>
+                                         <?php $updated_label = index_story_card_date_label((string) ($story['updated'] ?? '')); ?>
+                                         <?php if ($updated_label !== ''): ?>
+                                             <div class="sw-story-item-meta">
+                                                 <span class="sw-story-item-meta-label">Updated:</span> <?= h($updated_label) ?>
+                                             </div>
+                                         <?php endif; ?>
+                                     </div>
+                                 </div>
                                 <?php if (($story['snippet'] ?? '') !== ''): ?>
                                     <p class="sw-story-item-snippet"><?= h($story['snippet']) ?></p>
                                 <?php endif; ?>

@@ -76,6 +76,7 @@ $base = base_url();
             <p><strong>Guests</strong> can read stories, follow branches, and use shared AI keys. Logged-in contributors can also edit their own pages and manage their own API keys.</p>
             <p>Use <strong>📚 Stories</strong> to return to the main list. Use <strong>❓ Help</strong> any time you need a refresher on features or roles.</p>
             <p>To begin, click <strong>Begin New Story</strong>. You can start manually, let AI generate the opening, or start with AI and then branch into manual or custom-action play whenever you like.</p>
+            <p>On the story list, use the sort controls beside <strong>Stories</strong> to reorder cards by creation date, update date, title, author, or page count, with ascending or descending order.</p>
             <p>Admins can also post a rich-text homepage <strong>News and Announcements</strong> panel above the story list for site news, events, or maintenance notes. It starts expanded, then collapses automatically on later visits during the same browser session.</p>
         </section>
 

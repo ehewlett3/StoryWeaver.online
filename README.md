@@ -232,7 +232,7 @@ New accounts are created as **Contributors** by default. Admins can promote user
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/my-feature`)
 3. Make your changes
-4. Test locally with `php -S localhost:8080`
+4. Test locally with a full Apache/PHP stack such as **XAMPP** rather than `php -S`, since StoryWeaver relies on Apache-style `.htaccess` behavior for routes and protected directories
 5. Commit and push your branch
 6. Open a pull request
 
