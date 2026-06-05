@@ -411,22 +411,32 @@ if (is_dir($stories_dir)) {
             <div class="sw-story-list-heading">
                 <h1>Stories</h1>
                 <?php if (!empty($stories)): ?>
-                    <form method="GET" action="<?= h(app_url('index')) ?>" class="sw-story-sort-form">
-                        <label for="sw-story-sort" class="sw-story-sort-label">Sort by</label>
-                        <select id="sw-story-sort" name="sort" class="sw-input sw-input-sm">
-                            <?php foreach ($story_sort_options as $sort_value => $sort_label): ?>
-                                <option value="<?= h($sort_value) ?>" <?= $story_sort === $sort_value ? 'selected' : '' ?>>
-                                    <?= h($sort_label) ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
-                        <label for="sw-story-sort-dir" class="sw-story-sort-label">Order</label>
-                        <select id="sw-story-sort-dir" name="dir" class="sw-input sw-input-sm">
-                            <option value="desc" <?= $story_sort_dir === 'desc' ? 'selected' : '' ?>>Descending</option>
-                            <option value="asc" <?= $story_sort_dir === 'asc' ? 'selected' : '' ?>>Ascending</option>
-                        </select>
-                        <button type="submit" class="sw-btn sw-btn-secondary sw-btn-sm">Apply</button>
-                    </form>
+                    <details class="sw-story-filter-menu">
+                        <summary class="sw-story-filter-toggle">
+                            <span class="sw-filter-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                                    <path d="M3 5h18l-7 8v5l-4 2v-7L3 5z"></path>
+                                </svg>
+                            </span>
+                            Filter
+                        </summary>
+                        <form method="GET" action="<?= h(app_url('index')) ?>" class="sw-story-sort-form">
+                            <label for="sw-story-sort" class="sw-story-sort-label">Sort by</label>
+                            <select id="sw-story-sort" name="sort" class="sw-input sw-input-sm">
+                                <?php foreach ($story_sort_options as $sort_value => $sort_label): ?>
+                                    <option value="<?= h($sort_value) ?>" <?= $story_sort === $sort_value ? 'selected' : '' ?>>
+                                        <?= h($sort_label) ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                            <label for="sw-story-sort-dir" class="sw-story-sort-label">Order</label>
+                            <select id="sw-story-sort-dir" name="dir" class="sw-input sw-input-sm">
+                                <option value="desc" <?= $story_sort_dir === 'desc' ? 'selected' : '' ?>>Descending</option>
+                                <option value="asc" <?= $story_sort_dir === 'asc' ? 'selected' : '' ?>>Ascending</option>
+                            </select>
+                            <button type="submit" class="sw-btn sw-btn-secondary sw-btn-sm">Apply</button>
+                        </form>
+                    </details>
                 <?php endif; ?>
             </div>
             <button id="sw-new-story-btn" class="sw-btn sw-btn-primary">

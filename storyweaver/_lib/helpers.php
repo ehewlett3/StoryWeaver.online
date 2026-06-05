@@ -229,6 +229,19 @@ function sw_start_session(): void
     session_start();
 }
 
+/**
+ * Release the active session lock for long-running requests.
+ *
+ * This keeps the current $_SESSION data available to the request, but allows
+ * other requests to proceed instead of blocking on the same session file lock.
+ */
+function sw_close_session(): void
+{
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        session_write_close();
+    }
+}
+
 /* ------------------------------------------------------------------
  * Flash Messages (session-based, one-time display)
  * ----------------------------------------------------------------*/

@@ -128,13 +128,28 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     /**
-     * Get the selected text-generation key ID.
+     * Get the selected text-generation mode value.
      */
-    function getSelectedTextKeyId() {
+    function getSelectedTextModeValue() {
         var picker = document.getElementById('sw-text-key-picker')
                   || document.getElementById('sw-key-picker-modal');
         if (!picker) return '';
         return picker.value;
+    }
+
+    /**
+     * Get the selected text-generation key ID.
+     */
+    function getSelectedTextKeyId() {
+        var value = getSelectedTextModeValue();
+        return value === 'human' ? '' : value;
+    }
+
+    /**
+     * Determine whether human text mode is selected.
+     */
+    function isHumanTextMode() {
+        return getSelectedTextModeValue() === 'human';
     }
 
     /**
@@ -163,6 +178,56 @@ document.addEventListener('DOMContentLoaded', function () {
         return text.trim();
     }
 
+    function ensureChoiceFormField(form, fieldName) {
+        var field = form.querySelector('[name="' + fieldName + '"]');
+        if (field) {
+            return field;
+        }
+
+        field = document.createElement('input');
+        field.type = 'hidden';
+        field.name = fieldName;
+        form.appendChild(field);
+        return field;
+    }
+
+    function syncChoiceFormMode(form) {
+        if (!form) return;
+
+        ensureChoiceFormField(form, 'use_ai').value = isHumanTextMode() ? '0' : '1';
+        ensureChoiceFormField(form, 'key_id').value = getSelectedTextKeyId();
+    }
+
+    function updateTextAIControlVisibility() {
+        var showAiTextControls = !isHumanTextMode();
+        document.querySelectorAll('[data-ai-text-control]').forEach(function (el) {
+            el.hidden = !showAiTextControls;
+        });
+        if (!showAiTextControls) {
+            var pendingChoicesModalEl = document.getElementById('sw-pending-choice-modal');
+            if (pendingChoicesModalEl) {
+                pendingChoicesModalEl.classList.remove('sw-modal-open');
+                pendingChoicesModalEl.setAttribute('aria-hidden', 'true');
+            }
+        }
+    }
+
+    function submitChoiceForm(form, choiceText) {
+        if (!form) return;
+
+        syncChoiceFormMode(form);
+
+        var choiceField = ensureChoiceFormField(form, 'choice');
+        choiceField.value = choiceText || '';
+
+        var custom = form.querySelector('[name="custom_choice"]');
+        if (choiceText && custom) {
+            custom.value = '';
+        }
+
+        form.submit();
+    }
+
     // Restore last chosen keys from localStorage and listen for changes
     (function () {
         var textPickers = [
@@ -187,12 +252,16 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
                 picker.addEventListener('change', function () {
                     localStorage.setItem(storageKey, picker.value);
+                    updateTextAIControlVisibility();
+                    document.querySelectorAll('.sw-custom-choice').forEach(syncChoiceFormMode);
                 });
             });
         }
 
         restoreAndListen(textPickers, 'sw-last-text-key-id');
         restoreAndListen(imagePickers, 'sw-last-image-key-id');
+        updateTextAIControlVisibility();
+        document.querySelectorAll('.sw-custom-choice').forEach(syncChoiceFormMode);
     })();
 
     /**
@@ -491,6 +560,23 @@ document.addEventListener('DOMContentLoaded', function () {
         }, 300);
     }
 
+    var nodeContent = document.querySelector('.sw-node-content');
+    if (nodeContent) {
+        var showNodeEndActions = function () {
+            nodeContent.classList.add('sw-node-content-tapped');
+        };
+        var hideNodeEndActions = function (event) {
+            if (event && nodeContent.contains(event.target)) {
+                return;
+            }
+            nodeContent.classList.remove('sw-node-content-tapped');
+        };
+
+        nodeContent.addEventListener('click', showNodeEndActions);
+        nodeContent.addEventListener('focusin', showNodeEndActions);
+        document.addEventListener('click', hideNodeEndActions);
+    }
+
     function escapeHtml(str) {
         return String(str)
             .replace(/&/g, '&amp;')
@@ -610,21 +696,19 @@ document.addEventListener('DOMContentLoaded', function () {
             var parentNodeId = form.querySelector('[name="parent_node_id"]');
             if (!storyId || !parentNodeId) return;
 
+            syncChoiceFormMode(form);
+            if (isHumanTextMode()) {
+                submitChoiceForm(form, choiceText);
+                return;
+            }
+
             startStreamingGeneration({
                 story_id: storyId.value,
                 parent_node_id: parentNodeId.value,
                 choice_text: choiceText
             }, {
                 onFallback: function () {
-                    // Fall back to regular form POST
-                    var input = document.createElement('input');
-                    input.type = 'hidden';
-                    input.name = 'choice';
-                    input.value = choiceText;
-                    form.appendChild(input);
-                    var custom = form.querySelector('[name="custom_choice"]');
-                    if (custom) custom.value = '';
-                    form.submit();
+                    submitChoiceForm(form, choiceText);
                 }
             });
         });
@@ -640,11 +724,16 @@ document.addEventListener('DOMContentLoaded', function () {
             var choiceText = customInput ? customInput.value.trim() : '';
             if (choiceText === '') return; // let normal validation handle it
 
-            e.preventDefault();
-
             var storyId = form.querySelector('[name="story_id"]');
             var parentNodeId = form.querySelector('[name="parent_node_id"]');
             if (!storyId || !parentNodeId) return;
+
+            syncChoiceFormMode(form);
+            if (isHumanTextMode()) {
+                return;
+            }
+
+            e.preventDefault();
 
             startStreamingGeneration({
                 story_id: storyId.value,
@@ -739,6 +828,48 @@ document.addEventListener('DOMContentLoaded', function () {
                         showFlash('Error: ' + err.message, 'error');
                     });
                 }
+            });
+        });
+    }
+
+    var deleteFinalPageBtn = document.getElementById('sw-delete-final-page-btn');
+    if (deleteFinalPageBtn) {
+        deleteFinalPageBtn.addEventListener('click', function () {
+            if (!confirm('Delete this final page? This cannot be undone.')) {
+                return;
+            }
+
+            var storyId = deleteFinalPageBtn.getAttribute('data-story-id');
+            var nodeId = deleteFinalPageBtn.getAttribute('data-node-id');
+            var originalLabel = deleteFinalPageBtn.textContent;
+
+            deleteFinalPageBtn.disabled = true;
+            deleteFinalPageBtn.textContent = '…';
+
+            fetch(apiBase + '/api?action=delete_final_page', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    story_id: storyId,
+                    node_id: nodeId,
+                    _csrf_token: csrfValue
+                })
+            })
+            .then(function (res) { return res.json(); })
+            .then(function (data) {
+                if (data.ok && data.redirect) {
+                    window.location.href = data.redirect;
+                    return;
+                }
+
+                showFlash(data.error || 'Failed to delete the page.', 'error');
+                deleteFinalPageBtn.disabled = false;
+                deleteFinalPageBtn.textContent = originalLabel;
+            })
+            .catch(function (err) {
+                showFlash('Error: ' + err.message, 'error');
+                deleteFinalPageBtn.disabled = false;
+                deleteFinalPageBtn.textContent = originalLabel;
             });
         });
     }
@@ -858,7 +989,7 @@ document.addEventListener('DOMContentLoaded', function () {
             .finally(function () {
                 regeneratePendingChoicesController = null;
                 regeneratePendingChoicesBtn.disabled = false;
-                regeneratePendingChoicesBtn.textContent = '✨ Regenerate Pending Choices';
+                regeneratePendingChoicesBtn.textContent = regeneratePendingChoicesBtn.dataset.idleText || '✨ Regenerate Pending Choices';
                 regeneratePendingChoicesBtn.classList.remove('sw-btn-danger');
             });
         });
@@ -946,8 +1077,9 @@ document.addEventListener('DOMContentLoaded', function () {
     var regenImageBtn = document.getElementById('sw-regen-image-btn');
     var uploadInput = document.getElementById('sw-image-upload');
     var imageUploadLabel = document.querySelector('label[for="sw-image-upload"]');
-    var imageControlsHost = null;
-    var imageActionInsertBefore = null;
+    var imageControlsHost = document.getElementById('sw-node-image-actions');
+    var imageActionInsertBefore = document.getElementById('sw-image-action-menu');
+    var imageUploadMenu = document.getElementById('sw-image-action-menu');
     var imageActionStoryId = '';
     var imageActionNodeId = '';
     var canGenerateImages = !!genImageBtn || !!regenImageBtn;
@@ -957,15 +1089,8 @@ document.addEventListener('DOMContentLoaded', function () {
     var imageEstimateStorageKey = 'sw-image-generation-history-ms';
     var activeImageProgress = null;
 
-    [genImageBtn, regenImageBtn, imageUploadLabel, document.getElementById('sw-preview-prompt-btn'),
-     document.getElementById('sw-regenerate-story-btn'), document.getElementById('sw-open-pending-choices-btn')].forEach(function (el) {
+    [genImageBtn, regenImageBtn, uploadInput].forEach(function (el) {
         if (!el) return;
-        if (!imageControlsHost && typeof el.closest === 'function') {
-            imageControlsHost = el.closest('.sw-ai-indicator');
-        }
-        if (!imageActionInsertBefore && el !== genImageBtn && el !== regenImageBtn && imageControlsHost && el.parentNode === imageControlsHost) {
-            imageActionInsertBefore = el;
-        }
         if (!imageActionStoryId) {
             imageActionStoryId = el.getAttribute('data-story-id') || '';
         }
@@ -1247,6 +1372,14 @@ document.addEventListener('DOMContentLoaded', function () {
      * ================================================================*/
 
     if (uploadInput) {
+        if (imageUploadLabel) {
+            imageUploadLabel.addEventListener('click', function () {
+                if (imageUploadMenu) {
+                    imageUploadMenu.removeAttribute('open');
+                }
+            });
+        }
+
         uploadInput.addEventListener('change', function () {
             var file = uploadInput.files[0];
             if (!file) return;
@@ -1277,7 +1410,7 @@ document.addEventListener('DOMContentLoaded', function () {
             // Disable while uploading
             var label = imageUploadLabel;
             if (label) {
-                label.textContent = '📁 Uploading…';
+                label.textContent = 'Uploading…';
                 label.style.pointerEvents = 'none';
             }
 
@@ -1304,8 +1437,11 @@ document.addEventListener('DOMContentLoaded', function () {
             })
             .finally(function () {
                 uploadInput.value = '';
+                if (imageUploadMenu) {
+                    imageUploadMenu.removeAttribute('open');
+                }
                 if (label) {
-                    label.textContent = '📁 Upload Image';
+                    label.textContent = 'Upload image';
                     label.style.pointerEvents = '';
                 }
             });

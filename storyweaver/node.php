@@ -104,6 +104,29 @@ $can_rename_story = $user !== null
     && $is_root_node
     && role_level((string) ($user['role'] ?? 'viewer')) >= role_level('editor');
 
+$linked_choices = [];
+$display_pending_choices = [];
+foreach (($node['choices'] ?? []) as $choice) {
+    if (!empty($choice['quarantined'])) {
+        continue;
+    }
+
+    if (($choice['node'] ?? null) !== null) {
+        $linked_choices[] = $choice;
+    } else {
+        $display_pending_choices[] = $choice;
+    }
+}
+$collapse_pending_choices = !empty($linked_choices) && !empty($display_pending_choices);
+$show_end_actions = $can_edit || $can_regenerate_story;
+$show_image_actions = $has_image_model || ($user && $can_edit);
+$can_manage_ai_choices = $user && $can_edit && $ai_available && node_can_regenerate($node);
+$can_delete_final_page = $user && $can_edit && node_can_regenerate($node);
+$default_text_key_id = '';
+if (!empty($text_keys)) {
+    $default_text_key_id = (string) (($selected_key['id'] ?? '') ?: ($text_keys[0]['id'] ?? ''));
+}
+
 // Can this user change story theme? (story creator or admin, on root node only)
 $can_change_theme = false;
 if ($user && $is_root_node) {
@@ -145,37 +168,37 @@ if ($user && $is_root_node) {
             </div>
         <?php endif; ?>
 
-        <?php if ($can_edit || $can_flag): ?>
         <div class="sw-node-toolbar">
-            <?php if ($can_edit): ?>
-                <a href="<?= h(edit_url($story_id, $node_id)) ?>"
-                   class="sw-btn sw-btn-sm sw-btn-secondary">✏️ Edit</a>
-            <?php endif; ?>
-            <?php if ($can_jump_latest && $latest_node_id !== null && $latest_node_id !== $node_id): ?>
-                <a href="<?= h(node_url($story_id, $latest_node_id)) ?>"
-                   class="sw-btn sw-btn-sm sw-btn-secondary">🕒 Latest Page</a>
-            <?php endif; ?>
-            <?php if ($can_flag): ?>
-                <a href="<?= h(api_url('flag_concern', ['node' => $node_id])) ?>"
-                   class="sw-btn sw-btn-sm sw-btn-secondary">⚑ Flag</a>
-            <?php endif; ?>
+            <div class="sw-node-toolbar-left">
+                <nav class="sw-breadcrumb sw-breadcrumb-toolbar" aria-label="Breadcrumb">
+                    <a href="<?= h(app_url('index')) ?>">All Stories</a> ›
+                    <?php if ($root_id && $root_id !== $node_id): ?>
+                        <a href="<?= h(node_url($story_id, $root_id)) ?>"><?= h($node['title']) ?></a>
+                    <?php else: ?>
+                        <span><?= h($node['title']) ?></span>
+                    <?php endif; ?>
+                    <?php if ($node['choice_taken'] !== ''): ?>
+                        › <span class="sw-text-muted"><?= h($node['choice_taken']) ?></span>
+                    <?php endif; ?>
+                </nav>
+            </div>
+            <div class="sw-node-toolbar-right">
+                <?php if ($can_jump_latest && $latest_node_id !== null && $latest_node_id !== $node_id): ?>
+                    <a href="<?= h(node_url($story_id, $latest_node_id)) ?>"
+                       class="sw-btn sw-btn-sm sw-btn-secondary">🕒 Latest Page</a>
+                <?php endif; ?>
+                <?php if ($can_flag): ?>
+                    <button type="button"
+                            id="sw-flag-concern-btn"
+                            class="sw-btn sw-btn-sm sw-btn-secondary"
+                            data-story-id="<?= h($story_id) ?>"
+                            data-node-id="<?= h($node_id) ?>"
+                            title="Flag this page for review">
+                        ⚑ Flag
+                    </button>
+                <?php endif; ?>
+            </div>
         </div>
-        <?php endif; ?>
-
-        <!-- Breadcrumb -->
-        <nav class="sw-breadcrumb">
-            <a href="<?= h(app_url('index')) ?>">All Stories</a> ›
-            <?php
-            $root_id = story_find_root($story_id);
-            if ($root_id && $root_id !== $node_id): ?>
-                <a href="<?= h(node_url($story_id, $root_id)) ?>"><?= h($node['title']) ?></a>
-            <?php else: ?>
-                <span><?= h($node['title']) ?></span>
-            <?php endif; ?>
-            <?php if ($node['choice_taken'] !== ''): ?>
-                › <span class="sw-text-muted"><?= h($node['choice_taken']) ?></span>
-            <?php endif; ?>
-        </nav>
 
         <?php if ($is_root_node && ($story_scenario_essentials !== '' || $can_edit)): ?>
             <details class="sw-story-scenario" id="sw-story-scenario-details">
@@ -251,148 +274,161 @@ if ($user && $is_root_node) {
             </div>
         <?php endif; ?>
 
-        <!-- Story Content -->
-        <article class="sw-node-content">
-            <?php foreach ($node['paragraphs'] as $para): ?>
-                <p class="sw-para"><?= $para ?></p>
-            <?php endforeach; ?>
-            <?php if (empty($node['paragraphs'])): ?>
-                <p class="sw-para sw-text-muted"><em>This page has no content yet.
-                <?php if ($can_edit): ?>
-                    <a href="<?= h(edit_url($story_id, $node_id)) ?>">Write something →</a>
-                <?php endif; ?>
-                </em></p>
-            <?php endif; ?>
-        </article>
-
-        <!-- Images -->
-        <div class="sw-images" id="sw-images">
-            <?php
-            // Show existing images for this node
-            $image_glob = glob(sw_root() . '/_assets/images/' . $node_id . '-*');
-            if (!empty($image_glob)) {
-                foreach ($image_glob as $img_path) {
-                    $img_url = $base . '/_assets/images/' . basename($img_path);
-                    echo '<div class="sw-image-wrap">';
-                    echo '<img src="' . h($img_url) . '" alt="Story illustration" class="sw-node-image">';
-                    if ($can_edit) {
-                        echo '<button type="button" class="sw-image-delete-btn" data-image-url="' . h($img_url) . '" title="Delete image">&times;</button>';
-                    }
-                    echo '</div>';
-                }
-            }
-            ?>
-        </div>
-
-        <!-- AI / Image Controls -->
-        <?php if ($ai_available || $has_image_model || ($user && $can_edit)): ?>
-        <div class="sw-ai-indicator">
-            <?php if ($ai_available): ?>
-                <!-- Text AI picker -->
-                <?php if (count($text_keys) > 1): ?>
-                    <label class="sw-ai-badge">✨ Text:</label>
-                    <select id="sw-text-key-picker" class="sw-input sw-input-sm">
-                        <?php foreach ($text_keys as $ak): ?>
-                            <option value="<?= h($ak['id']) ?>">
-                                <?= h($ak['label']) ?> — <?= h($ak['model_text']) ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                <?php elseif (count($text_keys) === 1): ?>
-                    <span class="sw-ai-badge">✨ Text: <?= h($text_keys[0]['label']) ?> — <?= h($text_keys[0]['model_text']) ?></span>
-                <?php endif; ?>
-
-                <?php if ($has_image_model): ?>
-                    <!-- Image AI picker -->
-                    <?php if (count($image_keys) > 1): ?>
-                        <label class="sw-ai-badge">🖼️ Image:</label>
-                        <select id="sw-image-key-picker" class="sw-input sw-input-sm">
-                            <?php foreach ($image_keys as $ak): ?>
-                                <option value="<?= h($ak['id']) ?>">
-                                    <?= h($ak['label']) ?> — <?= h($ak['model_image']) ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
-                    <?php elseif (count($image_keys) === 1): ?>
-                        <span class="sw-ai-badge">🖼️ Image: <?= h($image_keys[0]['label']) ?> — <?= h($image_keys[0]['model_image']) ?></span>
+        <div class="sw-node-reading-panel">
+            <!-- Story Content -->
+            <article class="sw-node-content">
+                <?php foreach ($node['paragraphs'] as $para): ?>
+                    <p class="sw-para"><?= $para ?></p>
+                <?php endforeach; ?>
+                <?php if (empty($node['paragraphs'])): ?>
+                    <p class="sw-para sw-text-muted"><em>This page has no content yet.
+                    <?php if ($can_edit): ?>
+                        <a href="<?= h(edit_url($story_id, $node_id)) ?>">Write something →</a>
                     <?php endif; ?>
+                    </em></p>
                 <?php endif; ?>
+
+                <?php if ($show_end_actions): ?>
+                    <div class="sw-node-end-actions" aria-label="Story actions">
+                        <?php if ($can_edit): ?>
+                            <a href="<?= h(edit_url($story_id, $node_id)) ?>"
+                               class="sw-node-end-action sw-node-end-action-edit"
+                               title="Edit page"
+                               aria-label="Edit page">✎</a>
+                        <?php endif; ?>
+                        <?php if ($can_delete_final_page): ?>
+                            <button type="button"
+                                    id="sw-delete-final-page-btn"
+                                    class="sw-node-end-action sw-node-end-action-delete"
+                                    data-story-id="<?= h($story_id) ?>"
+                                    data-node-id="<?= h($node_id) ?>"
+                                    title="Delete page"
+                                    aria-label="Delete page">🗑</button>
+                        <?php endif; ?>
+                        <?php if ($can_regenerate_story): ?>
+                            <button type="button"
+                                    id="sw-regenerate-story-btn"
+                                    class="sw-node-end-action sw-node-end-action-regenerate"
+                                    data-ai-text-control="regenerate"
+                                    data-story-id="<?= h($story_id) ?>"
+                                    data-node-id="<?= h($node_id) ?>"
+                                    title="Regenerate story"
+                                    aria-label="Regenerate story">↻</button>
+                        <?php endif; ?>
+                    </div>
+                <?php endif; ?>
+            </article>
+
+            <!-- Images -->
+            <div class="sw-images" id="sw-images">
+                <?php
+                // Show existing images for this node
+                $image_glob = glob(sw_root() . '/_assets/images/' . $node_id . '-*');
+                if (!empty($image_glob)) {
+                    foreach ($image_glob as $img_path) {
+                        $img_url = $base . '/_assets/images/' . basename($img_path);
+                        echo '<div class="sw-image-wrap">';
+                        echo '<img src="' . h($img_url) . '" alt="Story illustration" class="sw-node-image">';
+                        if ($can_edit) {
+                            echo '<button type="button" class="sw-image-delete-btn" data-image-url="' . h($img_url) . '" title="Delete image">&times;</button>';
+                        }
+                        echo '</div>';
+                    }
+                }
+                ?>
+            </div>
+
+            <?php if ($show_image_actions): ?>
+                <div class="sw-node-image-actions" id="sw-node-image-actions">
+                    <?php if ($has_image_model && !$has_images): ?>
+                        <button type="button" id="sw-gen-image-btn" class="sw-btn sw-btn-sm sw-btn-secondary"
+                                data-story-id="<?= h($story_id) ?>" data-node-id="<?= h($node_id) ?>">
+                            🖼️ Generate Image
+                        </button>
+                    <?php elseif ($has_image_model && $has_images): ?>
+                        <button type="button" id="sw-regen-image-btn" class="sw-btn sw-btn-sm sw-btn-secondary"
+                                data-story-id="<?= h($story_id) ?>" data-node-id="<?= h($node_id) ?>"
+                                data-existing-image="<?= h($base . '/_assets/images/' . basename($image_glob[0])) ?>">
+                            🖼️ Regenerate Image
+                        </button>
+                    <?php endif; ?>
+
+                    <?php if ($user && $can_edit): ?>
+                        <details class="sw-inline-action-menu sw-image-action-menu" id="sw-image-action-menu">
+                            <summary class="sw-btn sw-btn-sm sw-btn-secondary sw-inline-action-toggle"
+                                     title="More image actions"
+                                     aria-label="More image actions">▾</summary>
+                            <div class="sw-inline-action-menu-panel">
+                                <label for="sw-image-upload" class="sw-inline-action-item">Upload image</label>
+                            </div>
+                        </details>
+                        <input type="file" id="sw-image-upload" accept="image/png,image/jpeg,image/gif,image/webp"
+                               data-story-id="<?= h($story_id) ?>" data-node-id="<?= h($node_id) ?>"
+                               style="display:none">
+                    <?php endif; ?>
+                </div>
             <?php endif; ?>
 
-            <?php if ($has_image_model && !$has_images): ?>
-                <button type="button" id="sw-gen-image-btn" class="sw-btn sw-btn-sm sw-btn-secondary"
-                        data-story-id="<?= h($story_id) ?>" data-node-id="<?= h($node_id) ?>">
-                    🖼️ Generate Image
-                </button>
-            <?php elseif ($has_image_model && $has_images): ?>
-                <button type="button" id="sw-regen-image-btn" class="sw-btn sw-btn-sm sw-btn-secondary"
-                        data-story-id="<?= h($story_id) ?>" data-node-id="<?= h($node_id) ?>"
-                        data-existing-image="<?= h($base . '/_assets/images/' . basename($image_glob[0])) ?>">
-                    🖼️ Regenerate Image
-                </button>
-            <?php endif; ?>
-
-            <?php if ($user && $can_edit): ?>
-                <label for="sw-image-upload" class="sw-btn sw-btn-sm sw-btn-secondary" style="cursor:pointer">
-                    📁 Upload Image
-                </label>
-                <input type="file" id="sw-image-upload" accept="image/png,image/jpeg,image/gif,image/webp"
-                       data-story-id="<?= h($story_id) ?>" data-node-id="<?= h($node_id) ?>"
-                       style="display:none">
-            <?php endif; ?>
-
-            <?php if ($user && $user['role'] === 'admin'): ?>
-                <button type="button" id="sw-preview-prompt-btn" class="sw-btn sw-btn-sm sw-btn-secondary"
-                        data-story-id="<?= h($story_id) ?>" data-node-id="<?= h($node_id) ?>">
-                    🔍 Preview Prompts
-                </button>
-            <?php endif; ?>
-
-            <?php if ($can_regenerate_story): ?>
-                <button type="button" id="sw-regenerate-story-btn" class="sw-btn sw-btn-sm sw-btn-secondary"
-                        data-story-id="<?= h($story_id) ?>" data-node-id="<?= h($node_id) ?>">
-                    🔄 Regenerate Story
-                </button>
-            <?php endif; ?>
-
-            <?php if ($user && $can_edit && $pending_choice_count > 0): ?>
-                <button type="button"
-                        id="sw-open-pending-choices-btn"
-                        class="sw-btn sw-btn-sm sw-btn-secondary"
-                        aria-haspopup="dialog"
-                        aria-controls="sw-pending-choice-modal">
-                    <?= $pending_choices_need_review ? '⚠️ Review Pending Choices' : '🧵 Pending Choices' ?>
-                    (<?= (int) $pending_choice_count ?>)
-                </button>
-            <?php endif; ?>
         </div>
-        <?php endif; ?>
 
         <!-- Choices -->
         <section class="sw-choices">
-            <?php if (!empty($node['choices'])): ?>
-                <h2>What do you do?</h2>
-                <ul>
-                    <?php foreach ($node['choices'] as $choice): ?>
-                        <?php if (!empty($choice['quarantined'])) continue; ?>
+            <div class="sw-choices-header">
+                <h2>Choose Now!</h2>
+                <?php if ($can_manage_ai_choices): ?>
+                    <button type="button"
+                            id="sw-open-pending-choices-btn"
+                            class="sw-btn sw-btn-sm sw-btn-secondary"
+                            data-ai-text-control="choices"
+                            aria-haspopup="dialog"
+                            aria-controls="sw-pending-choice-modal">
+                        Get New Choices
+                    </button>
+                <?php endif; ?>
+            </div>
+
+            <?php if (!empty($linked_choices)): ?>
+                <ul class="sw-choice-list">
+                    <?php foreach ($linked_choices as $choice): ?>
+                        <?php $child_id = basename((string) $choice['node'], '.html'); ?>
                         <li>
-                            <?php if ($choice['node'] !== null): ?>
-                                <?php
-                                $child_id = basename($choice['node'], '.html');
-                                ?>
-                                <a href="<?= h(node_url($story_id, $child_id)) ?>">
-                                    <?= h($choice['text']) ?>
-                                </a>
-                            <?php else: ?>
-                                <a href="#" class="sw-choice-pending"
-                                   data-choice-id="<?= (int)$choice['id'] ?>"
-                                   data-choice-text="<?= h($choice['text']) ?>">
-                                    <?= h($choice['text']) ?> <span class="sw-text-muted">(pending)</span>
-                                </a>
-                            <?php endif; ?>
+                            <a href="<?= h(node_url($story_id, $child_id)) ?>">
+                                <?= h($choice['text']) ?>
+                            </a>
                         </li>
                     <?php endforeach; ?>
                 </ul>
+            <?php endif; ?>
+
+            <?php if (!empty($display_pending_choices)): ?>
+                <?php if ($collapse_pending_choices): ?>
+                    <details class="sw-choice-accordion">
+                        <summary>More choices</summary>
+                        <ul class="sw-choice-list sw-choice-list-secondary">
+                            <?php foreach ($display_pending_choices as $choice): ?>
+                                <li>
+                                    <a href="#" class="sw-choice-pending"
+                                       data-choice-id="<?= (int) $choice['id'] ?>"
+                                       data-choice-text="<?= h($choice['text']) ?>">
+                                        <?= h($choice['text']) ?>
+                                    </a>
+                                </li>
+                            <?php endforeach; ?>
+                        </ul>
+                    </details>
+                <?php else: ?>
+                    <ul class="sw-choice-list">
+                        <?php foreach ($display_pending_choices as $choice): ?>
+                            <li>
+                                <a href="#" class="sw-choice-pending"
+                                   data-choice-id="<?= (int) $choice['id'] ?>"
+                                   data-choice-text="<?= h($choice['text']) ?>">
+                                    <?= h($choice['text']) ?>
+                                </a>
+                            </li>
+                        <?php endforeach; ?>
+                    </ul>
+                <?php endif; ?>
             <?php endif; ?>
 
             <!-- Custom choice form -->
@@ -400,14 +436,57 @@ if ($user && $is_root_node) {
                 <input type="hidden" name="story_id" value="<?= h($story_id) ?>">
                 <input type="hidden" name="parent_node_id" value="<?= h($node_id) ?>">
                 <input type="hidden" name="_csrf_token" value="<?= h(csrf_token()) ?>">
+                <input type="hidden" name="use_ai" value="1">
+                <input type="hidden" name="key_id" value="<?= h($default_text_key_id) ?>">
                 <input type="text" name="custom_choice" class="sw-input"
                        placeholder="Or type your own action…">
                 <button type="submit" class="sw-btn sw-btn-primary">Continue →</button>
             </form>
 
+            <?php if ($ai_available || $has_image_model || ($user && $user['role'] === 'admin')): ?>
+                <div class="sw-choice-ai-row">
+                    <div class="sw-ai-indicator">
+                        <?php if ($ai_available): ?>
+                            <label class="sw-ai-badge" for="sw-text-key-picker">✨ Text:</label>
+                            <select id="sw-text-key-picker" class="sw-input sw-input-sm">
+                                <option value="human">Human — write it yourself</option>
+                                <?php foreach ($text_keys as $ak): ?>
+                                    <option value="<?= h($ak['id']) ?>" <?= $default_text_key_id === (string) $ak['id'] ? 'selected' : '' ?>>
+                                        <?= h($ak['label']) ?> — <?= h($ak['model_text']) ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        <?php endif; ?>
+
+                        <?php if ($has_image_model): ?>
+                            <?php if (count($image_keys) > 1): ?>
+                                <label class="sw-ai-badge" for="sw-image-key-picker">🖼️ Image:</label>
+                                <select id="sw-image-key-picker" class="sw-input sw-input-sm">
+                                    <?php foreach ($image_keys as $ak): ?>
+                                        <option value="<?= h($ak['id']) ?>">
+                                            <?= h($ak['label']) ?> — <?= h($ak['model_image']) ?>
+                                        </option>
+                                    <?php endforeach; ?>
+                                </select>
+                            <?php elseif (count($image_keys) === 1): ?>
+                                <span class="sw-ai-badge">🖼️ Image: <?= h($image_keys[0]['label']) ?> — <?= h($image_keys[0]['model_image']) ?></span>
+                            <?php endif; ?>
+                        <?php endif; ?>
+                    </div>
+
+                    <?php if ($user && $user['role'] === 'admin'): ?>
+                        <button type="button" id="sw-preview-prompt-btn" class="sw-btn sw-btn-sm sw-btn-secondary"
+                                data-story-id="<?= h($story_id) ?>" data-node-id="<?= h($node_id) ?>">
+                            🔍 Preview Prompts
+                        </button>
+                    <?php endif; ?>
+                </div>
+            <?php endif; ?>
+
             <?php if ($ai_available && empty($node['choices']) && !empty($node['paragraphs'])): ?>
                 <!-- AI continuation for manually-started nodes -->
                 <button type="button" id="sw-ai-continue-btn" class="sw-btn sw-btn-secondary sw-btn-ai"
+                        data-ai-text-control="continue"
                         data-story-id="<?= h($story_id) ?>"
                         data-node-id="<?= h($node_id) ?>">
                     ✨ Generate with AI
@@ -415,7 +494,7 @@ if ($user && $is_root_node) {
             <?php endif; ?>
         </section>
 
-        <?php if ($user && $can_edit && $pending_choice_count > 0): ?>
+        <?php if ($can_manage_ai_choices): ?>
             <div id="sw-pending-choice-modal" class="sw-modal-backdrop" aria-hidden="true">
                 <div class="sw-modal sw-pending-choice-modal" role="dialog" aria-modal="true" aria-labelledby="sw-pending-choice-modal-title">
                     <div class="sw-modal-header">
@@ -425,12 +504,18 @@ if ($user && $is_root_node) {
 
                     <div class="sw-alert <?= $pending_choices_need_review ? 'sw-alert-warning' : 'sw-alert-info' ?> sw-pending-choice-review">
                         <strong>
-                            <?= $pending_choices_need_review
-                                ? 'This page was edited, so its pending choices may need updating.'
-                                : 'This page still has pending choices you can maintain here.' ?>
+                            <?php if ($pending_choice_count === 0): ?>
+                                This page does not have any pending choices yet.
+                            <?php else: ?>
+                                <?= $pending_choices_need_review
+                                    ? 'This page was edited, so its pending choices may need updating.'
+                                    : 'This page still has pending choices you can maintain here.' ?>
+                            <?php endif; ?>
                         </strong>
                         <p>
-                            <?php if ($ai_available): ?>
+                            <?php if ($pending_choice_count === 0): ?>
+                                Generate a fresh set of AI choices for this page, or keep writing manually.
+                            <?php elseif ($ai_available): ?>
                                 Regenerate just the pending choices with AI, or edit/delete them manually below.
                             <?php else: ?>
                                 No text AI key is currently available, so edit or delete the pending choices manually below.
@@ -440,38 +525,41 @@ if ($user && $is_root_node) {
                             <button type="button"
                                     id="sw-regenerate-pending-choices-btn"
                                     class="sw-btn sw-btn-sm sw-btn-secondary"
+                                    data-idle-text="<?= h($pending_choice_count > 0 ? '✨ Regenerate Pending Choices' : '✨ Get New Choices') ?>"
                                     data-story-id="<?= h($story_id) ?>"
                                     data-node-id="<?= h($node_id) ?>">
-                                ✨ Regenerate Pending Choices
+                                <?= $pending_choice_count > 0 ? '✨ Regenerate Pending Choices' : '✨ Get New Choices' ?>
                             </button>
                         <?php endif; ?>
                     </div>
 
-                    <div class="sw-pending-choice-manager">
-                        <?php foreach ($pending_choices as $choice): ?>
-                            <div class="sw-pending-choice-item"
-                                 data-story-id="<?= h($story_id) ?>"
-                                 data-node-id="<?= h($node_id) ?>"
-                                 data-choice-id="<?= (int) $choice['id'] ?>">
-                                <label class="sw-pending-choice-label" for="sw-pending-choice-<?= (int) $choice['id'] ?>">
-                                    Pending choice
-                                </label>
-                                <div class="sw-pending-choice-row">
-                                    <input type="text"
-                                           id="sw-pending-choice-<?= (int) $choice['id'] ?>"
-                                           class="sw-input sw-pending-choice-input"
-                                           value="<?= h($choice['text']) ?>"
-                                           maxlength="160">
-                                    <button type="button" class="sw-btn sw-btn-sm sw-btn-secondary sw-pending-choice-save-btn">
-                                        Save
-                                    </button>
-                                    <button type="button" class="sw-btn sw-btn-sm sw-btn-danger sw-pending-choice-delete-btn">
-                                        Delete
-                                    </button>
+                    <?php if ($pending_choice_count > 0): ?>
+                        <div class="sw-pending-choice-manager">
+                            <?php foreach ($pending_choices as $choice): ?>
+                                <div class="sw-pending-choice-item"
+                                     data-story-id="<?= h($story_id) ?>"
+                                     data-node-id="<?= h($node_id) ?>"
+                                     data-choice-id="<?= (int) $choice['id'] ?>">
+                                    <label class="sw-pending-choice-label" for="sw-pending-choice-<?= (int) $choice['id'] ?>">
+                                        Pending choice
+                                    </label>
+                                    <div class="sw-pending-choice-row">
+                                        <input type="text"
+                                               id="sw-pending-choice-<?= (int) $choice['id'] ?>"
+                                               class="sw-input sw-pending-choice-input"
+                                               value="<?= h($choice['text']) ?>"
+                                               maxlength="160">
+                                        <button type="button" class="sw-btn sw-btn-sm sw-btn-secondary sw-pending-choice-save-btn">
+                                            Save
+                                        </button>
+                                        <button type="button" class="sw-btn sw-btn-sm sw-btn-danger sw-pending-choice-delete-btn">
+                                            Delete
+                                        </button>
+                                    </div>
                                 </div>
-                            </div>
-                        <?php endforeach; ?>
-                    </div>
+                            <?php endforeach; ?>
+                        </div>
+                    <?php endif; ?>
                 </div>
             </div>
         <?php endif; ?>
@@ -519,12 +607,6 @@ if ($user && $is_root_node) {
                 ?>
                 · <span title="Generated by <?= h($meta['ai_model'] ?? 'AI') ?>">🤖 <?= h($meta['ai_model'] ?? 'AI') ?></span>
                 <?php endif; ?>
-            </span>
-            <span class="sw-flag-concern">
-                <a href="#" id="sw-flag-concern-btn"
-                   data-story-id="<?= h($story_id) ?>"
-                   data-node-id="<?= h($node_id) ?>"
-                   title="Flag this page for review">⚑ Flag</a>
             </span>
             <?php if ($user && in_array($user['role'], ['editor', 'admin']) && !$is_quarantined): ?>
                 <span class="sw-flag-review">

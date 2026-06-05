@@ -94,6 +94,9 @@ switch ($action) {
     case 'delete_node':
         handle_delete_node();
         break;
+    case 'delete_final_page':
+        handle_delete_final_page();
+        break;
     case 'dismiss_concern':
         handle_dismiss_concern();
         break;
@@ -396,6 +399,8 @@ function handle_generate_node(): void
         $parent = null;
     }
 
+    sw_close_session();
+
     $prompt_bundle = $is_opening
         ? build_opening_prompt_bundle($title, $scenario, $user)
         : build_continuation_prompt_bundle($story_id, $parent_node_id, $choice_text, $check_quarantine, $user, $key_record);
@@ -615,6 +620,8 @@ function handle_regenerate_node(): void
         $prompt_bundle = build_continuation_prompt_bundle($story_id, $node['parent_id'], $choice_taken, true, $user, $key_record);
     }
 
+    sw_close_session();
+
     $system_prompt = $prompt_bundle['system_prompt'];
     $story_context = append_story_regeneration_guidance($prompt_bundle['story_context'], $steer_prompt);
     $active_key = $key_record;
@@ -755,9 +762,7 @@ function handle_regenerate_pending_choices(): void
 
     $pending_choices = node_pending_choices($node);
     $pending_choice_count = count($pending_choices);
-    if ($pending_choice_count === 0) {
-        json_error('This page has no pending choices to regenerate.', 400);
-    }
+    $target_choice_count = $pending_choice_count > 0 ? $pending_choice_count : 3;
 
     if ($key_id !== '' && validate_id($key_id, 'key_')) {
         $key_record = api_key_find_by_id($key_id);
@@ -787,10 +792,12 @@ function handle_regenerate_pending_choices(): void
         }
     }
 
+    sw_close_session();
+
     $prompt_bundle = build_pending_choices_prompt_bundle(
         $story_id,
         $node_id,
-        $pending_choice_count,
+        $target_choice_count,
         $locked_choices,
         true,
         $user,
@@ -814,7 +821,7 @@ function handle_regenerate_pending_choices(): void
                 $raw_response = $provider->generateText($system_prompt, $repair_msg);
             }
 
-            $choices = parse_ai_choices_response($raw_response, $pending_choice_count);
+            $choices = parse_ai_choices_response($raw_response, $target_choice_count);
             if ($choices !== null) {
                 break;
             }
@@ -841,7 +848,7 @@ function handle_regenerate_pending_choices(): void
             $prompt_bundle = build_pending_choices_prompt_bundle(
                 $story_id,
                 $node_id,
-                $pending_choice_count,
+                $target_choice_count,
                 $locked_choices,
                 true,
                 $user,
@@ -862,7 +869,7 @@ function handle_regenerate_pending_choices(): void
                         $raw_response = $provider->generateText($system_prompt, $repair_msg);
                     }
 
-                    $choices = parse_ai_choices_response($raw_response, $pending_choice_count);
+                    $choices = parse_ai_choices_response($raw_response, $target_choice_count);
                     if ($choices !== null) {
                         break;
                     }
@@ -892,7 +899,7 @@ function handle_regenerate_pending_choices(): void
         }
     }
 
-    if (count($normalized_choices) !== $pending_choice_count) {
+    if (count($normalized_choices) !== $target_choice_count) {
         json_error('AI generation failed: the regenerated choices were incomplete.', 502);
     }
 
@@ -1010,6 +1017,8 @@ function handle_stream_regenerate_node(): void
         }
         $prompt_bundle = build_continuation_prompt_bundle($story_id, $node['parent_id'], $choice_taken, true, $user, $key_record);
     }
+
+    sw_close_session();
 
     $system_prompt = $prompt_bundle['system_prompt'];
     $story_context = append_story_regeneration_guidance($prompt_bundle['story_context'], $steer_prompt);
@@ -1316,6 +1325,8 @@ function handle_stream_generate_node(): void
         $parent = null;
     }
 
+    sw_close_session();
+
     $prompt_bundle = $is_opening
         ? build_opening_prompt_bundle($title, $scenario, $user)
         : build_continuation_prompt_bundle($story_id, $parent_node_id, $choice_text, $check_quarantine, $user, $key_record);
@@ -1515,6 +1526,8 @@ function handle_test_api_key(): void
     } catch (RuntimeException $e) {
         json_error($e->getMessage(), 500);
     }
+
+    sw_close_session();
 
     $provider = api_ai_provider($key_record, $user);
     $result = $provider->testConnection();
@@ -2189,6 +2202,7 @@ function handle_generate_image(): void
     }
 
     $steer_prompt = trim((string) ($input['steer_prompt'] ?? ''));
+    sw_close_session();
     $context_summary = build_image_context_summary($story_id, $node_id, $key_record, $user, $check_quarantine);
     $prompt     = build_image_prompt($story_id, $node_id, $context_summary, $check_quarantine);
     $prompt = append_image_regeneration_guidance($prompt, $steer_prompt);
@@ -2369,6 +2383,56 @@ function handle_delete_node(): void
     json_success([
         'message' => 'Page permanently deleted.',
         'redirect' => app_url('index'),
+    ]);
+}
+
+/**
+ * Delete a final/leaf page that has no active child pages.
+ *
+ * Requires the page owner or editor+ role. Expects: { story_id, node_id }
+ */
+function handle_delete_final_page(): void
+{
+    $input = get_json_input();
+    csrf_check($input['_csrf_token'] ?? '');
+
+    $user = current_user();
+    if ($user === null) {
+        json_error('Authentication required.', 401);
+    }
+
+    $story_id = trim((string) ($input['story_id'] ?? ''));
+    $node_id  = trim((string) ($input['node_id'] ?? ''));
+    if (!validate_id($story_id, 'story_') || !validate_id($node_id, 'node_')) {
+        json_error('Invalid story or page ID.', 400);
+    }
+
+    $node = node_read_for_user($story_id, $node_id, $user);
+    if ($node === null) {
+        json_error('Story page not found.', 404);
+    }
+
+    $can_edit = ($node['author_id'] ?? '') === $user['id']
+        || role_level((string) ($user['role'] ?? 'viewer')) >= role_level('editor');
+    if (!$can_edit) {
+        json_error('You do not have permission to delete this page.', 403);
+    }
+
+    if (!node_can_regenerate($node)) {
+        json_error('Only final pages without active child pages can be deleted.', 400);
+    }
+
+    $redirect = ($node['parent_id'] ?? '') !== ''
+        ? node_url($story_id, (string) $node['parent_id'])
+        : app_url('index');
+
+    if (!node_delete_leaf($story_id, $node_id)) {
+        json_error('Failed to delete page.', 500);
+    }
+
+    json_success([
+        'message' => 'Page deleted.',
+        'redirect' => $redirect,
     ]);
 }
 
@@ -2828,6 +2892,8 @@ function handle_preview_prompt(): void
             json_error($e->getMessage(), 500);
         }
     }
+
+    sw_close_session();
 
     if ($is_opening) {
         $prompt_bundle = build_opening_prompt_bundle($title, $scenario, $user);

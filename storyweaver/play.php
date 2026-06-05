@@ -83,6 +83,7 @@ function handle_new_story(): void
         if ($key_record !== null) {
             try {
                 $key_record = api_key_prepare_for_use($key_record);
+                sw_close_session();
                 $prompt_bundle = build_opening_prompt_bundle($title, $scenario, $user);
 
                 $provider = play_ai_provider($key_record, $user);
@@ -161,6 +162,8 @@ function handle_continue_choice(): void
     $parent_node_id = trim($_POST['parent_node_id'] ?? '');
     $choice_text    = trim($_POST['choice'] ?? '');
     $custom_choice  = trim($_POST['custom_choice'] ?? '');
+    $use_ai         = ($_POST['use_ai'] ?? '1') === '1';
+    $key_id         = trim((string) ($_POST['key_id'] ?? ''));
 
     // Use custom choice if provided, otherwise use the clicked choice
     $chosen = $custom_choice !== '' ? $custom_choice : $choice_text;
@@ -194,10 +197,26 @@ function handle_continue_choice(): void
     $child_location = ($parent['location'] ?? 'stories') === 'quarantine' ? 'quarantine' : 'stories';
 
     // Try AI generation
-    $key_record = api_key_select_for_user($user_id);
+    if ($use_ai) {
+        if ($key_id !== '' && validate_id($key_id, 'key_')) {
+            $key_record = api_key_find_by_id($key_id);
+            if ($key_record === null || $key_record['status'] !== 'active') {
+                $key_record = null;
+            } elseif (($key_error = api_key_access_error($key_record, $user)) !== null) {
+                flash('error', $key_error);
+                redirect(node_url($story_id, $parent_node_id));
+            }
+        } else {
+            $key_record = api_key_select_for_user($user_id);
+        }
+    } else {
+        $key_record = null;
+    }
+
     if ($key_record !== null) {
         try {
             $key_record = api_key_prepare_for_use($key_record);
+            sw_close_session();
             $prompt_bundle = build_continuation_prompt_bundle($story_id, $parent_node_id, $chosen, $check_q, $user, $key_record);
 
             $provider = play_ai_provider($key_record, $user);

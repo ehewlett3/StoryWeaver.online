@@ -858,6 +858,85 @@ function node_can_regenerate(array $node): bool
 }
 
 /**
+ * Delete a leaf/final node and restore its parent link to a pending choice.
+ */
+function node_delete_leaf(string $story_id, string $node_id): bool
+{
+    $node = node_read($story_id, $node_id, true);
+    if ($node === null || !node_can_regenerate($node)) {
+        return false;
+    }
+
+    $parent_id = (string) ($node['parent_id'] ?? '');
+    $original_parent_choices = null;
+    if ($parent_id !== '') {
+        $parent = node_read($story_id, $parent_id, true);
+        if ($parent === null) {
+            return false;
+        }
+
+        $original_parent_choices = $parent['choices'] ?? [];
+        $choices = $original_parent_choices;
+        $child_filename = $node_id . '.html';
+        $choice_text = trim((string) ($node['choice_taken'] ?? ''));
+        $updated = false;
+        $max_choice_id = 0;
+
+        foreach ($choices as &$choice) {
+            $max_choice_id = max($max_choice_id, (int) ($choice['id'] ?? 0));
+            if ((string) ($choice['node'] ?? '') !== $child_filename) {
+                continue;
+            }
+
+            $choice['node'] = null;
+            if (trim((string) ($choice['text'] ?? '')) === '' && $choice_text !== '') {
+                $choice['text'] = $choice_text;
+            }
+            $updated = true;
+            break;
+        }
+        unset($choice);
+
+        if (!$updated && $choice_text !== '') {
+            $choices[] = [
+                'id' => $max_choice_id + 1,
+                'text' => $choice_text,
+                'node' => null,
+            ];
+        }
+
+        if (!node_update_choices($story_id, $parent_id, $choices)) {
+            return false;
+        }
+    }
+
+    $path = node_resolve_path($story_id, $node_id);
+    if ($path === null || !@unlink($path)) {
+        if ($parent_id !== '' && is_array($original_parent_choices)) {
+            node_update_choices($story_id, $parent_id, $original_parent_choices);
+        }
+        return false;
+    }
+
+    foreach (glob(sw_root() . '/_assets/images/' . $node_id . '-*') ?: [] as $image_path) {
+        @unlink($image_path);
+    }
+
+    foreach ([STORIES_DIR . '/' . $story_id, QUARANTINE_DIR . '/' . $story_id] as $story_dir) {
+        if (!is_dir($story_dir)) {
+            continue;
+        }
+
+        $entries = scandir($story_dir);
+        if ($entries !== false && count($entries) <= 2) {
+            @rmdir($story_dir);
+        }
+    }
+
+    return true;
+}
+
+/**
  * Link a parent node's choice to a newly created child node.
  *
  * Finds the choice matching the given text and sets its 'node' field
