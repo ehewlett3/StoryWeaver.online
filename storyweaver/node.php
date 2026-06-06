@@ -118,10 +118,14 @@ foreach (($node['choices'] ?? []) as $choice) {
     }
 }
 $collapse_pending_choices = !empty($linked_choices) && !empty($display_pending_choices);
-$show_end_actions = $can_edit || $can_regenerate_story;
+$back_action_url = $node['parent_id'] !== ''
+    ? node_url($story_id, $node['parent_id'])
+    : app_url('index');
+$back_action_label = $node['parent_id'] !== '' ? 'Back' : 'All stories';
 $show_image_actions = $has_image_model || ($user && $can_edit);
 $can_manage_ai_choices = $user && $can_edit && $ai_available && node_can_regenerate($node);
 $can_delete_final_page = $user && $can_edit && node_can_regenerate($node);
+$show_manage_end_actions = $can_edit || $can_delete_final_page || $can_regenerate_story;
 $default_text_key_id = '';
 if (!empty($text_keys)) {
     $default_text_key_id = (string) (($selected_key['id'] ?? '') ?: ($text_keys[0]['id'] ?? ''));
@@ -288,7 +292,12 @@ if ($user && $is_root_node) {
                     </em></p>
                 <?php endif; ?>
 
-                <?php if ($show_end_actions): ?>
+                <div class="sw-node-end-row">
+                    <a href="<?= h($back_action_url) ?>"
+                       class="sw-node-end-action sw-node-end-action-back"
+                       title="<?= h($back_action_label) ?>"
+                       aria-label="<?= h($back_action_label) ?>">←</a>
+                    <?php if ($show_manage_end_actions): ?>
                     <div class="sw-node-end-actions" aria-label="Story actions">
                         <?php if ($can_edit): ?>
                             <a href="<?= h(edit_url($story_id, $node_id)) ?>"
@@ -316,7 +325,10 @@ if ($user && $is_root_node) {
                                     aria-label="Regenerate story">↻</button>
                         <?php endif; ?>
                     </div>
-                <?php endif; ?>
+                    <?php else: ?>
+                    <span class="sw-node-end-actions-spacer" aria-hidden="true"></span>
+                    <?php endif; ?>
+                </div>
             </article>
 
             <!-- Images -->
@@ -448,7 +460,7 @@ if ($user && $is_root_node) {
                     <div class="sw-ai-indicator">
                         <?php if ($ai_available): ?>
                             <label class="sw-ai-badge" for="sw-text-key-picker">✨ Text:</label>
-                            <select id="sw-text-key-picker" class="sw-input sw-input-sm">
+                            <select id="sw-text-key-picker" class="sw-input sw-input-sm sw-ai-picker">
                                 <option value="human">Human — write it yourself</option>
                                 <?php foreach ($text_keys as $ak): ?>
                                     <option value="<?= h($ak['id']) ?>" <?= $default_text_key_id === (string) $ak['id'] ? 'selected' : '' ?>>
@@ -461,7 +473,7 @@ if ($user && $is_root_node) {
                         <?php if ($has_image_model): ?>
                             <?php if (count($image_keys) > 1): ?>
                                 <label class="sw-ai-badge" for="sw-image-key-picker">🖼️ Image:</label>
-                                <select id="sw-image-key-picker" class="sw-input sw-input-sm">
+                                <select id="sw-image-key-picker" class="sw-input sw-input-sm sw-ai-picker">
                                     <?php foreach ($image_keys as $ak): ?>
                                         <option value="<?= h($ak['id']) ?>">
                                             <?= h($ak['label']) ?> — <?= h($ak['model_image']) ?>

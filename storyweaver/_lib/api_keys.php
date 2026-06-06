@@ -577,7 +577,7 @@ function api_key_select_text_for_user(?string $user_id): ?array
         }
     }
 
-    $shared_key = api_key_select_shared_for_user($keys, $user, true);
+    $shared_key = api_key_select_shared_for_user($keys, $user, true, false);
     if ($shared_key !== null) {
         return $shared_key;
     }
@@ -587,6 +587,48 @@ function api_key_select_text_for_user(?string $user_id): ?array
         foreach ($keys as $key) {
             if (($key['status'] ?? '') === 'active'
                 && !empty($key['model_text'])
+                && api_key_access_error($key, $user) === null) {
+                $admin_keys[] = $key;
+            }
+        }
+        if (!empty($admin_keys)) {
+            return end($admin_keys);
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Select an image-capable AI key that the current user may use.
+ */
+function api_key_select_image_for_user(?string $user_id): ?array
+{
+    $user = $user_id !== null ? user_find_by_id($user_id) : null;
+    $keys = api_keys_read();
+
+    if ($user_id !== null) {
+        foreach ($keys as $key) {
+            if (($key['owner_user_id'] ?? '') === $user_id
+                && ($key['scope'] ?? '') === 'self'
+                && ($key['status'] ?? '') === 'active'
+                && !empty($key['model_image'])
+                && api_key_access_error($key, $user) === null) {
+                return $key;
+            }
+        }
+    }
+
+    $shared_key = api_key_select_shared_for_user($keys, $user, false, true);
+    if ($shared_key !== null) {
+        return $shared_key;
+    }
+
+    if ($user !== null && ($user['role'] ?? '') === 'admin') {
+        $admin_keys = [];
+        foreach ($keys as $key) {
+            if (($key['status'] ?? '') === 'active'
+                && !empty($key['model_image'])
                 && api_key_access_error($key, $user) === null) {
                 $admin_keys[] = $key;
             }
@@ -665,7 +707,7 @@ function api_key_set_default_public(string $id): bool
  *
  * @param array $keys
  */
-function api_key_select_shared_for_user(array $keys, ?array $user, bool $require_text_model): ?array
+function api_key_select_shared_for_user(array $keys, ?array $user, bool $require_text_model, bool $require_image_model = false): ?array
 {
     $shared_keys = [];
     $default_key = null;
@@ -678,6 +720,9 @@ function api_key_select_shared_for_user(array $keys, ?array $user, bool $require
         }
 
         if ($require_text_model && empty($key['model_text'])) {
+            continue;
+        }
+        if ($require_image_model && empty($key['model_image'])) {
             continue;
         }
 

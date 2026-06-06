@@ -21,6 +21,9 @@ class AIProvider
     /** @var int Request timeout in seconds. */
     private int $timeout = 75;
 
+    /** @var callable|null */
+    private $abortHandler = null;
+
     /**
      * Create an AIProvider for a specific key configuration.
      *
@@ -43,6 +46,10 @@ class AIProvider
      */
     public function generateText(string $system_prompt, string $user_message): string
     {
+        if ($this->shouldAbort()) {
+            throw $this->abortException();
+        }
+
         $provider = $this->key['provider'] ?? 'openai';
 
         return match ($provider) {
@@ -63,6 +70,10 @@ class AIProvider
      */
     public function generateTextStream(string $system_prompt, string $user_message, callable $onChunk): string
     {
+        if ($this->shouldAbort()) {
+            throw $this->abortException();
+        }
+
         $provider = $this->key['provider'] ?? 'openai';
 
         return match ($provider) {
@@ -70,6 +81,14 @@ class AIProvider
             'gemini'    => $this->streamGemini($system_prompt, $user_message, $onChunk),
             default     => $this->streamOpenAICompatible($system_prompt, $user_message, $onChunk),
         };
+    }
+
+    /**
+     * Register a callback that returns true when this request should abort.
+     */
+    public function setAbortHandler(?callable $abortHandler): void
+    {
+        $this->abortHandler = $abortHandler;
     }
 
     /**
@@ -361,6 +380,9 @@ class AIProvider
 
         $chunk = '';
         foreach ($words as $part) {
+            if ($this->shouldAbort()) {
+                throw $this->abortException();
+            }
             if ($chunk !== '' && mb_strlen($chunk . $part) > 120) {
                 $onChunk($chunk);
                 $chunk = '';
@@ -533,7 +555,7 @@ class AIProvider
     private function httpPostCurl(string $url, string $json, array $headers): string
     {
         $ch = curl_init($url);
-        curl_setopt_array($ch, [
+        $options = [
             CURLOPT_POST           => true,
             CURLOPT_POSTFIELDS     => $json,
             CURLOPT_HTTPHEADER     => $headers,
@@ -542,7 +564,22 @@ class AIProvider
             CURLOPT_CONNECTTIMEOUT => 15,
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_MAXREDIRS      => 3,
-        ]);
+        ];
+
+        if (defined('CURLOPT_NOPROGRESS')) {
+            $options[CURLOPT_NOPROGRESS] = false;
+        }
+        if (defined('CURLOPT_XFERINFOFUNCTION')) {
+            $options[CURLOPT_XFERINFOFUNCTION] = function (...$args): int {
+                return $this->shouldAbort() ? 1 : 0;
+            };
+        } elseif (defined('CURLOPT_PROGRESSFUNCTION')) {
+            $options[CURLOPT_PROGRESSFUNCTION] = function (...$args): int {
+                return $this->shouldAbort() ? 1 : 0;
+            };
+        }
+
+        curl_setopt_array($ch, $options);
 
         $response = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -550,7 +587,14 @@ class AIProvider
         curl_close($ch);
 
         if ($response === false) {
+            if ($this->shouldAbort()) {
+                throw $this->abortException();
+            }
             throw new RuntimeException('HTTP request failed: ' . $error);
+        }
+
+        if ($this->shouldAbort()) {
+            throw $this->abortException();
         }
 
         if ($httpCode === 401 || $httpCode === 403) {
@@ -579,6 +623,10 @@ class AIProvider
      */
     private function httpPostStream(string $url, string $json, array $headers): string
     {
+        if ($this->shouldAbort()) {
+            throw $this->abortException();
+        }
+
         $headerStr = implode("\r\n", $headers);
 
         $opts = [
@@ -595,7 +643,14 @@ class AIProvider
         $response = @file_get_contents($url, false, $context);
 
         if ($response === false) {
+            if ($this->shouldAbort()) {
+                throw $this->abortException();
+            }
             throw new RuntimeException('HTTP request failed (stream). Check URL and network.');
+        }
+
+        if ($this->shouldAbort()) {
+            throw $this->abortException();
         }
 
         // Check HTTP status from response headers
@@ -634,7 +689,7 @@ class AIProvider
         $httpCode = 0;
 
         $ch = curl_init($url);
-        curl_setopt_array($ch, [
+        $options = [
             CURLOPT_POST           => true,
             CURLOPT_POSTFIELDS     => $json,
             CURLOPT_HTTPHEADER     => $headers,
@@ -650,6 +705,10 @@ class AIProvider
                 return strlen($header);
             },
             CURLOPT_WRITEFUNCTION  => function ($ch, $chunk) use (&$buffer, &$httpCode, $onLine) {
+                if ($this->shouldAbort()) {
+                    return 0;
+                }
+
                 // On error status, accumulate for error message
                 if ($httpCode >= 400) {
                     $buffer .= $chunk;
@@ -667,14 +726,36 @@ class AIProvider
                 }
                 return strlen($chunk);
             },
-        ]);
+        ];
+
+        if (defined('CURLOPT_NOPROGRESS')) {
+            $options[CURLOPT_NOPROGRESS] = false;
+        }
+        if (defined('CURLOPT_XFERINFOFUNCTION')) {
+            $options[CURLOPT_XFERINFOFUNCTION] = function (...$args): int {
+                return $this->shouldAbort() ? 1 : 0;
+            };
+        } elseif (defined('CURLOPT_PROGRESSFUNCTION')) {
+            $options[CURLOPT_PROGRESSFUNCTION] = function (...$args): int {
+                return $this->shouldAbort() ? 1 : 0;
+            };
+        }
+
+        curl_setopt_array($ch, $options);
 
         curl_exec($ch);
         $error = curl_error($ch);
         curl_close($ch);
 
         if ($error !== '') {
+            if ($this->shouldAbort()) {
+                throw $this->abortException();
+            }
             throw new RuntimeException('Streaming request failed: ' . $error);
+        }
+
+        if ($this->shouldAbort()) {
+            throw $this->abortException();
         }
 
         if ($httpCode === 401 || $httpCode === 403) {
@@ -690,6 +771,26 @@ class AIProvider
         if ($remaining !== '') {
             $onLine($remaining);
         }
+    }
+
+    /**
+     * Return true when generation should be cancelled.
+     */
+    private function shouldAbort(): bool
+    {
+        if (is_callable($this->abortHandler) && (bool) call_user_func($this->abortHandler)) {
+            return true;
+        }
+
+        return sw_should_abort();
+    }
+
+    /**
+     * Build the standard user-abort exception.
+     */
+    private function abortException(): RuntimeException
+    {
+        return new RuntimeException('Generation aborted by user.');
     }
 
     /**

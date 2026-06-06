@@ -242,6 +242,23 @@ function sw_close_session(): void
     }
 }
 
+/**
+ * Register a request-scoped abort handler for long-running operations.
+ */
+function sw_set_abort_handler(?callable $handler): void
+{
+    $GLOBALS['sw_abort_handler'] = $handler;
+}
+
+/**
+ * Return true when the current request has been marked for abort.
+ */
+function sw_should_abort(): bool
+{
+    $handler = $GLOBALS['sw_abort_handler'] ?? null;
+    return is_callable($handler) ? (bool) $handler() : false;
+}
+
 /* ------------------------------------------------------------------
  * Flash Messages (session-based, one-time display)
  * ----------------------------------------------------------------*/
@@ -638,6 +655,71 @@ function data_path(string $file = ''): string
         $path .= '/' . ltrim($file, '/');
     }
     return $path;
+}
+
+/**
+ * Validate a client-generated streaming request ID.
+ */
+function sw_is_generation_request_id(string $request_id): bool
+{
+    return preg_match('/^gen_[a-f0-9]{32}$/', $request_id) === 1;
+}
+
+/**
+ * Get the directory used for generation abort flags.
+ */
+function sw_generation_abort_dir(): string
+{
+    $dir = data_path('runtime/generation_aborts');
+    if (!is_dir($dir)) {
+        mkdir($dir, 0755, true);
+    }
+    return $dir;
+}
+
+/**
+ * Get the abort-flag path for a generation request.
+ */
+function sw_generation_abort_path(string $request_id): string
+{
+    return sw_generation_abort_dir() . '/' . $request_id . '.flag';
+}
+
+/**
+ * Mark a generation request as aborted.
+ */
+function sw_generation_request_abort(string $request_id): bool
+{
+    if (!sw_is_generation_request_id($request_id)) {
+        return false;
+    }
+
+    atomic_write(sw_generation_abort_path($request_id), gmdate('c'));
+    return true;
+}
+
+/**
+ * Return true when a generation request has been asked to abort.
+ */
+function sw_generation_abort_requested(string $request_id): bool
+{
+    return sw_is_generation_request_id($request_id)
+        && file_exists(sw_generation_abort_path($request_id));
+}
+
+/**
+ * Clear any stored abort flag for a generation request.
+ */
+function sw_generation_clear_abort(string $request_id): void
+{
+    if (!sw_is_generation_request_id($request_id)) {
+        return;
+    }
+
+    $path = sw_generation_abort_path($request_id);
+    if (file_exists($path)) {
+        @unlink($path);
+    }
 }
 
 /**

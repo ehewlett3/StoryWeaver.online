@@ -812,7 +812,11 @@ textarea.sw-theme-editor {
     justify-content: space-between;
     gap: 1rem;
     margin-top: 0.8rem;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+}
+
+.sw-choice-ai-row > .sw-btn {
+    flex-shrink: 0;
 }
 
 .sw-node-reading-panel {
@@ -872,12 +876,20 @@ textarea.sw-theme-editor {
     color: var(--sw-color-primary);
 }
 
+.sw-node-end-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin: 0.5rem 0 0;
+}
+
 .sw-node-end-actions {
     display: flex;
     flex-direction: row;
     justify-content: flex-end;
     gap: 0.5rem;
-    margin: 0.5rem 0 0;
+    margin: 0;
     opacity: 0;
     transform: translateY(6px);
     pointer-events: none;
@@ -890,6 +902,10 @@ textarea.sw-theme-editor {
     opacity: 1;
     transform: translateY(0);
     pointer-events: auto;
+}
+
+.sw-node-end-action-back {
+    flex-shrink: 0;
 }
 
 .sw-node-end-action-edit {
@@ -932,6 +948,12 @@ textarea.sw-theme-editor {
 .sw-node-end-action-delete:hover {
     color: var(--sw-color-error);
     border-color: var(--sw-color-error);
+}
+
+.sw-node-end-actions-spacer {
+    width: 2.25rem;
+    height: 2.25rem;
+    flex-shrink: 0;
 }
 
 @media (hover: none) {
@@ -2075,6 +2097,8 @@ textarea.sw-theme-editor {
     padding: 0;
     margin: 0;
     flex-wrap: wrap;
+    flex: 1 1 auto;
+    min-width: 0;
 }
 
 .sw-ai-badge {
@@ -2088,6 +2112,14 @@ textarea.sw-theme-editor {
     font-size: 0.8rem;
     width: auto;
     min-width: 0;
+}
+
+.sw-ai-picker {
+    width: 12rem;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 /* ------------------------------------------------------------------

@@ -46,6 +46,9 @@ switch ($action) {
     case 'stream_regenerate_node':
         handle_stream_regenerate_node();
         break;
+    case 'abort_generation':
+        handle_abort_generation();
+        break;
     case 'regenerate_node':
         handle_regenerate_node();
         break;
@@ -932,6 +935,7 @@ function handle_stream_regenerate_node(): void
     header('Cache-Control: no-cache');
     header('Connection: keep-alive');
     header('X-Accel-Buffering: no');
+    ignore_user_abort(false);
 
     while (ob_get_level()) ob_end_clean();
 
@@ -951,7 +955,23 @@ function handle_stream_regenerate_node(): void
     $story_id = trim($input['story_id'] ?? '');
     $node_id  = trim($input['node_id'] ?? '');
     $key_id   = trim($input['key_id'] ?? '');
+    $request_id = trim((string) ($input['request_id'] ?? ''));
     $steer_prompt = trim((string) ($input['steer_prompt'] ?? ''));
+
+    $track_abort = sw_is_generation_request_id($request_id);
+    if ($track_abort) {
+        sw_generation_clear_abort($request_id);
+    }
+    $abort_requested = static function () use ($track_abort, $request_id): bool {
+        return connection_aborted() || ($track_abort && sw_generation_abort_requested($request_id));
+    };
+    sw_set_abort_handler($abort_requested);
+    register_shutdown_function(static function () use ($track_abort, $request_id): void {
+        sw_set_abort_handler(null);
+        if ($track_abort) {
+            sw_generation_clear_abort($request_id);
+        }
+    });
 
     if (!validate_id($story_id, 'story_') || !validate_id($node_id, 'node_')) {
         sse_event('error', ['error' => 'Invalid story or page ID.']);
@@ -993,6 +1013,10 @@ function handle_stream_regenerate_node(): void
         exit;
     }
 
+    if ($abort_requested()) {
+        exit;
+    }
+
     try {
         $key_record = api_key_prepare_for_use($key_record);
     } catch (RuntimeException $e) {
@@ -1001,6 +1025,7 @@ function handle_stream_regenerate_node(): void
     }
 
     sse_event('info', ['key_label' => $key_record['label'] ?? 'Unknown']);
+    sw_close_session();
 
     $is_root = ($node['parent_id'] ?? '') === '';
     if ($is_root) {
@@ -1018,11 +1043,14 @@ function handle_stream_regenerate_node(): void
         $prompt_bundle = build_continuation_prompt_bundle($story_id, $node['parent_id'], $choice_taken, true, $user, $key_record);
     }
 
-    sw_close_session();
+    if ($abort_requested()) {
+        exit;
+    }
 
     $system_prompt = $prompt_bundle['system_prompt'];
     $story_context = append_story_regeneration_guidance($prompt_bundle['story_context'], $steer_prompt);
     $provider = api_ai_provider($key_record, $user);
+    $provider->setAbortHandler($abort_requested);
     $active_key = $key_record;
     $tokens_sent = 0;
     $raw_response = '';
@@ -1036,6 +1064,9 @@ function handle_stream_regenerate_node(): void
     try {
         $raw_response = $provider->generateTextStream($system_prompt, $story_context, $stream_chunk_handler);
     } catch (RuntimeException $e) {
+        if (ai_generation_aborted($e) || $abort_requested()) {
+            exit;
+        }
         $err_msg = $e->getMessage();
 
         if (str_contains($err_msg, 'Authentication failed')) {
@@ -1059,11 +1090,15 @@ function handle_stream_regenerate_node(): void
                     $story_context = append_story_regeneration_guidance($prompt_bundle['story_context'], $steer_prompt);
                 }
                 $provider = api_ai_provider($active_key, $user);
+                $provider->setAbortHandler($abort_requested);
                 sse_event('info', ['key_label' => $active_key['label'] ?? 'Unknown', 'fallback' => true]);
 
                 try {
                     $raw_response = $provider->generateTextStream($system_prompt, $story_context, $stream_chunk_handler);
                 } catch (RuntimeException $e2) {
+                    if (ai_generation_aborted($e2) || $abort_requested()) {
+                        exit;
+                    }
                     if (str_contains($e2->getMessage(), 'Authentication failed')) {
                         api_key_mark_unavailable($active_key['id'], $e2->getMessage());
                     }
@@ -1080,6 +1115,10 @@ function handle_stream_regenerate_node(): void
         }
     }
 
+    if ($abort_requested()) {
+        exit;
+    }
+
     $parsed = parse_ai_response($raw_response);
     if ($parsed === null) {
         try {
@@ -1088,8 +1127,15 @@ function handle_stream_regenerate_node(): void
             $raw_response = $provider->generateText($system_prompt, $repair_msg);
             $parsed = parse_ai_response($raw_response);
         } catch (RuntimeException $e) {
+            if (ai_generation_aborted($e) || $abort_requested()) {
+                exit;
+            }
             // Ignore retry failure
         }
+    }
+
+    if ($abort_requested()) {
+        exit;
     }
 
     if ($parsed === null) {
@@ -1253,6 +1299,7 @@ function handle_stream_generate_node(): void
     header('Cache-Control: no-cache');
     header('Connection: keep-alive');
     header('X-Accel-Buffering: no'); // nginx
+    ignore_user_abort(false);
 
     // Disable output buffering
     while (ob_get_level()) ob_end_clean();
@@ -1271,6 +1318,22 @@ function handle_stream_generate_node(): void
     $scenario       = normalize_scenario_essentials((string) ($input['scenario_essentials'] ?? ''));
     $title          = normalize_story_title((string) ($input['title'] ?? ''));
     $key_id         = trim($input['key_id'] ?? '');
+    $request_id     = trim((string) ($input['request_id'] ?? ''));
+
+    $track_abort = sw_is_generation_request_id($request_id);
+    if ($track_abort) {
+        sw_generation_clear_abort($request_id);
+    }
+    $abort_requested = static function () use ($track_abort, $request_id): bool {
+        return connection_aborted() || ($track_abort && sw_generation_abort_requested($request_id));
+    };
+    sw_set_abort_handler($abort_requested);
+    register_shutdown_function(static function () use ($track_abort, $request_id): void {
+        sw_set_abort_handler(null);
+        if ($track_abort) {
+            sw_generation_clear_abort($request_id);
+        }
+    });
 
     $user = current_user();
     $user_id = $user ? $user['id'] : null;
@@ -1291,6 +1354,9 @@ function handle_stream_generate_node(): void
 
     if ($key_record === null) {
         sse_event('error', ['error' => 'No AI key available.']);
+        exit;
+    }
+    if ($abort_requested()) {
         exit;
     }
     try {
@@ -1330,10 +1396,14 @@ function handle_stream_generate_node(): void
     $prompt_bundle = $is_opening
         ? build_opening_prompt_bundle($title, $scenario, $user)
         : build_continuation_prompt_bundle($story_id, $parent_node_id, $choice_text, $check_quarantine, $user, $key_record);
+    if ($abort_requested()) {
+        exit;
+    }
     $system_prompt = $prompt_bundle['system_prompt'];
     $story_context = $prompt_bundle['story_context'];
 
     $provider   = api_ai_provider($key_record, $user);
+    $provider->setAbortHandler($abort_requested);
     $active_key = $key_record;
 
     // Track tokens sent so we know whether we can still fall back transparently
@@ -1349,6 +1419,9 @@ function handle_stream_generate_node(): void
     try {
         $raw_response = $provider->generateTextStream($system_prompt, $story_context, $stream_chunk_handler);
     } catch (RuntimeException $e) {
+        if (ai_generation_aborted($e) || $abort_requested()) {
+            exit;
+        }
         $err_msg = $e->getMessage();
 
         if (str_contains($err_msg, 'Authentication failed')) {
@@ -1373,11 +1446,15 @@ function handle_stream_generate_node(): void
                 $system_prompt = $prompt_bundle['system_prompt'];
                 $story_context = $prompt_bundle['story_context'];
                 $provider   = api_ai_provider($active_key, $user);
+                $provider->setAbortHandler($abort_requested);
                 sse_event('info', ['key_label' => $active_key['label'] ?? 'Unknown', 'fallback' => true]);
 
                 try {
                     $raw_response = $provider->generateTextStream($system_prompt, $story_context, $stream_chunk_handler);
                 } catch (RuntimeException $e2) {
+                    if (ai_generation_aborted($e2) || $abort_requested()) {
+                        exit;
+                    }
                     if (str_contains($e2->getMessage(), 'Authentication failed')) {
                         api_key_mark_unavailable($active_key['id'], $e2->getMessage());
                     }
@@ -1394,6 +1471,10 @@ function handle_stream_generate_node(): void
         }
     }
 
+    if ($abort_requested()) {
+        exit;
+    }
+
     // Parse the accumulated response
     $parsed = parse_ai_response($raw_response);
     if ($parsed === null) {
@@ -1404,8 +1485,15 @@ function handle_stream_generate_node(): void
             $raw_response = $provider->generateText($system_prompt, $repair_msg);
             $parsed = parse_ai_response($raw_response);
         } catch (RuntimeException $e) {
+            if (ai_generation_aborted($e) || $abort_requested()) {
+                exit;
+            }
             // Ignore retry failure
         }
+    }
+
+    if ($abort_requested()) {
+        exit;
     }
 
     if ($parsed === null) {
@@ -1479,6 +1567,31 @@ function sse_event(string $event, array $data): void
     echo "event: " . $event . "\n";
     echo "data: " . json_encode($data, JSON_UNESCAPED_UNICODE) . "\n\n";
     flush();
+}
+
+/**
+ * Return true when an AI request ended because the user cancelled it.
+ */
+function ai_generation_aborted(RuntimeException $e): bool
+{
+    return $e->getMessage() === 'Generation aborted by user.';
+}
+
+/**
+ * Mark an in-flight generation request as aborted.
+ */
+function handle_abort_generation(): void
+{
+    $input = get_json_input();
+    csrf_check((string) ($input['_csrf_token'] ?? ''));
+
+    $request_id = trim((string) ($input['request_id'] ?? ''));
+    if (!sw_is_generation_request_id($request_id)) {
+        json_error('Invalid request ID.', 400);
+    }
+
+    sw_generation_request_abort($request_id);
+    json_success(['message' => 'Abort requested.']);
 }
 
 /**
@@ -2193,12 +2306,19 @@ function handle_generate_image(): void
         $key_record = api_key_select_for_user($user_id);
     }
 
+    if ($key_record === null || empty($key_record['model_image'])) {
+        $fallback_image_key = api_key_select_image_for_user($user_id);
+        if ($fallback_image_key !== null) {
+            $key_record = $fallback_image_key;
+        }
+    }
+
     if ($key_record === null) {
         json_error('No AI key available.');
     }
 
     if (empty($key_record['model_image'])) {
-        json_error('Selected key has no image model configured.');
+        json_error('No image-generation model is available.');
     }
 
     $steer_prompt = trim((string) ($input['steer_prompt'] ?? ''));

@@ -178,6 +178,54 @@ document.addEventListener('DOMContentLoaded', function () {
         return text.trim();
     }
 
+    function createStreamingRequestId() {
+        var bytes = [];
+        if (window.crypto && typeof window.crypto.getRandomValues === 'function') {
+            var random = new Uint8Array(16);
+            window.crypto.getRandomValues(random);
+            for (var i = 0; i < random.length; i++) {
+                bytes.push(random[i].toString(16).padStart(2, '0'));
+            }
+            return 'gen_' + bytes.join('');
+        }
+
+        var fallback = '';
+        while (fallback.length < 32) {
+            fallback += Math.floor(Math.random() * 0x100000000).toString(16).padStart(8, '0');
+        }
+        return 'gen_' + fallback.slice(0, 32);
+    }
+
+    function notifyGenerationAbort(requestId) {
+        if (!requestId) {
+            return;
+        }
+
+        var body = JSON.stringify({
+            request_id: requestId,
+            _csrf_token: csrfValue
+        });
+        var url = apiBase + '/api?action=abort_generation';
+
+        if (navigator.sendBeacon) {
+            try {
+                var blob = new Blob([body], { type: 'application/json' });
+                if (navigator.sendBeacon(url, blob)) {
+                    return;
+                }
+            } catch (err) {
+                // Fall through to fetch keepalive.
+            }
+        }
+
+        fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: body,
+            keepalive: true
+        }).catch(function () {});
+    }
+
     function ensureChoiceFormField(form, fieldName) {
         var field = form.querySelector('[name="' + fieldName + '"]');
         if (field) {
@@ -283,6 +331,19 @@ document.addEventListener('DOMContentLoaded', function () {
         var controller = typeof AbortController === 'function' ? new AbortController() : null;
         var finished = false;
         var abortedByUser = false;
+        var abortHandled = false;
+        var requestId = createStreamingRequestId();
+
+        function completeAbortUi() {
+            if (abortHandled) {
+                return;
+            }
+            abortHandled = true;
+            if (overlay && overlay.parentNode) {
+                overlay.remove();
+            }
+            showFlash('Generation cancelled.', 'info');
+        }
 
         function removeAbortButton() {
             if (abortBtn && abortBtn.parentNode) {
@@ -303,15 +364,14 @@ document.addEventListener('DOMContentLoaded', function () {
                 abortBtn.disabled = true;
                 abortBtn.textContent = 'Aborting…';
             }
+            notifyGenerationAbort(requestId);
             if (reader) {
                 reader.cancel().catch(function () {});
             }
             if (controller) {
                 controller.abort();
-            } else {
-                overlay.remove();
-                showFlash('Generation cancelled.', 'info');
             }
+            completeAbortUi();
         }
 
         if (abortBtn) {
@@ -372,6 +432,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         payload._csrf_token = csrfValue;
         payload.key_id = payload.key_id || getSelectedTextKeyId();
+        payload.request_id = requestId;
 
         // Persist text key choice for next time
         if (payload.key_id) {
@@ -408,6 +469,9 @@ document.addEventListener('DOMContentLoaded', function () {
                     buffer = parts.pop(); // keep incomplete part
 
                     parts.forEach(function (part) {
+                        if (abortedByUser) {
+                            return;
+                        }
                         var eventMatch = part.match(/^event:\s*(\w+)/m);
                         if (!eventMatch) return;
                         var eventType = eventMatch[1];
@@ -435,6 +499,9 @@ document.addEventListener('DOMContentLoaded', function () {
                                 statusEl.textContent = data.message;
                             }
                         } else if (eventType === 'done') {
+                            if (abortedByUser) {
+                                return;
+                            }
                             finished = true;
                             removeAbortButton();
                             var data;
@@ -446,6 +513,9 @@ document.addEventListener('DOMContentLoaded', function () {
                                 showDropInResult(overlay, data, options);
                             }
                         } else if (eventType === 'error') {
+                            if (abortedByUser) {
+                                return;
+                            }
                             finished = true;
                             removeAbortButton();
                             var data;
@@ -469,8 +539,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     }
                 }).catch(function () {
                     if (abortedByUser) {
-                        overlay.remove();
-                        showFlash('Generation cancelled.', 'info');
+                        completeAbortUi();
                         return;
                     }
                     // Stream error — fall back
@@ -484,8 +553,7 @@ document.addEventListener('DOMContentLoaded', function () {
             read();
         }).catch(function (err) {
             if (abortedByUser || (err && err.name === 'AbortError')) {
-                overlay.remove();
-                showFlash('Generation cancelled.', 'info');
+                completeAbortUi();
                 return;
             }
             // Fetch failed — fall back to form POST
