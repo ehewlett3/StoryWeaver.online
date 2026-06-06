@@ -100,6 +100,9 @@ switch ($action) {
     case 'delete_final_page':
         handle_delete_final_page();
         break;
+    case 'delete_story':
+        handle_delete_story();
+        break;
     case 'dismiss_concern':
         handle_dismiss_concern();
         break;
@@ -123,6 +126,15 @@ switch ($action) {
         break;
     case 'update_story_scenario':
         handle_update_story_scenario();
+        break;
+    case 'set_story_visibility':
+        handle_set_story_visibility();
+        break;
+    case 'grant_story_access':
+        handle_grant_story_access();
+        break;
+    case 'revoke_story_access':
+        handle_revoke_story_access();
         break;
     case 'delete_image':
         handle_delete_image();
@@ -351,14 +363,22 @@ function handle_generate_node(): void
     $story_id       = $input['story_id'] ?? '';
     $parent_node_id = $input['parent_node_id'] ?? '';
     $choice_text    = trim($input['choice_text'] ?? '');
+    $story_opening  = (string) ($input['story_opening'] ?? '');
     $scenario       = normalize_scenario_essentials((string) ($input['scenario_essentials'] ?? ''));
     $title          = normalize_story_title((string) ($input['title'] ?? ''));
     $key_id         = trim($input['key_id'] ?? '');
+    $image_key_id   = trim((string) ($input['image_key_id'] ?? ''));
+    $story_visibility = (string) ($input['story_visibility'] ?? 'public');
+    $auto_generate_images = !empty($input['auto_generate_images']);
 
     // Determine the user for key selection
     $user = current_user();
     $user_id = $user ? $user['id'] : null;
     $author_id = $user ? $user['id'] : 'anonymous';
+    $story_visibility = ($user && $story_visibility === 'private') ? 'private' : 'public';
+    $auto_generate_images = $user !== null && $auto_generate_images;
+    $image_key_id = validate_id($image_key_id, 'key_') ? $image_key_id : '';
+    $opening_paragraphs = normalize_story_opening_paragraphs($story_opening);
 
     // Select API key (optionally by specific key_id)
     if ($key_id !== '' && validate_id($key_id, 'key_')) {
@@ -405,7 +425,7 @@ function handle_generate_node(): void
     sw_close_session();
 
     $prompt_bundle = $is_opening
-        ? build_opening_prompt_bundle($title, $scenario, $user)
+        ? build_opening_prompt_bundle($title, $scenario, $user, $story_opening)
         : build_continuation_prompt_bundle($story_id, $parent_node_id, $choice_text, $check_quarantine, $user, $key_record);
     $system_prompt = $prompt_bundle['system_prompt'];
     $story_context = $prompt_bundle['story_context'];
@@ -453,7 +473,7 @@ function handle_generate_node(): void
                 json_error($e->getMessage(), 500);
             }
             $prompt_bundle = $is_opening
-                ? build_opening_prompt_bundle($title, $scenario, $user)
+                ? build_opening_prompt_bundle($title, $scenario, $user, $story_opening)
                 : build_continuation_prompt_bundle($story_id, $parent_node_id, $choice_text, $check_quarantine, $user, $active_key);
             $system_prompt = $prompt_bundle['system_prompt'];
             $story_context = $prompt_bundle['story_context'];
@@ -501,6 +521,9 @@ function handle_generate_node(): void
     if (empty($paragraphs)) {
         $paragraphs = [$is_opening ? 'The story begins…' : 'The story continues…'];
     }
+    if ($is_opening && !empty($opening_paragraphs)) {
+        $paragraphs = array_merge($opening_paragraphs, $paragraphs);
+    }
 
     // Build choices (all pending — node is null)
     $choices = $parsed['choices'] ?? [];
@@ -508,10 +531,14 @@ function handle_generate_node(): void
     if ($is_opening) {
         // Create new story + root node
         $result = story_create(h($title), $author_id, $paragraphs, [
-            'ai_model'            => $active_key['model_text'] ?? '',
-            'ai_provider'         => $active_key['provider'] ?? '',
-            'ai_key_label'        => $active_key['label'] ?? '',
-            'scenario_essentials' => $prompt_bundle['scenario_essentials'],
+            'ai_model'             => $active_key['model_text'] ?? '',
+            'ai_provider'          => $active_key['provider'] ?? '',
+            'ai_key_label'         => $active_key['label'] ?? '',
+            'scenario_essentials'  => $prompt_bundle['scenario_essentials'],
+            'visibility'           => $story_visibility,
+            'shared_user_ids'      => [],
+            'auto_generate_images' => $auto_generate_images,
+            'auto_image_key_id'    => $auto_generate_images ? $image_key_id : '',
         ]);
         $story_id = $result['story_id'];
         $node_id  = $result['node_id'];
@@ -539,11 +566,21 @@ function handle_generate_node(): void
         node_link_choice($story_id, $parent_node_id, $choice_text, $node_id);
     }
 
+    $auto_image_enabled = $is_opening ? $auto_generate_images : story_auto_images_enabled($story_id);
+    $done_url = node_url($story_id, $node_id);
+    if ($auto_image_enabled) {
+        $done_url = app_url('node', [
+            'story' => $story_id,
+            'id' => $node_id,
+            'auto_image' => '1',
+        ]);
+    }
+
     $base = base_url();
     json_success([
         'story_id' => $story_id,
         'node_id'  => $node_id,
-        'url'      => node_url($story_id, $node_id),
+        'url'      => $done_url,
         'ending'   => $parsed['ending'] ?? false,
     ]);
 }
@@ -1315,9 +1352,13 @@ function handle_stream_generate_node(): void
     $story_id       = $input['story_id'] ?? '';
     $parent_node_id = $input['parent_node_id'] ?? '';
     $choice_text    = trim($input['choice_text'] ?? '');
+    $story_opening  = (string) ($input['story_opening'] ?? '');
     $scenario       = normalize_scenario_essentials((string) ($input['scenario_essentials'] ?? ''));
     $title          = normalize_story_title((string) ($input['title'] ?? ''));
     $key_id         = trim($input['key_id'] ?? '');
+    $image_key_id   = trim((string) ($input['image_key_id'] ?? ''));
+    $story_visibility = (string) ($input['story_visibility'] ?? 'public');
+    $auto_generate_images = !empty($input['auto_generate_images']);
     $request_id     = trim((string) ($input['request_id'] ?? ''));
 
     $track_abort = sw_is_generation_request_id($request_id);
@@ -1338,6 +1379,10 @@ function handle_stream_generate_node(): void
     $user = current_user();
     $user_id = $user ? $user['id'] : null;
     $author_id = $user ? $user['id'] : 'anonymous';
+    $story_visibility = ($user && $story_visibility === 'private') ? 'private' : 'public';
+    $auto_generate_images = $user !== null && $auto_generate_images;
+    $image_key_id = validate_id($image_key_id, 'key_') ? $image_key_id : '';
+    $opening_paragraphs = normalize_story_opening_paragraphs($story_opening);
 
     // Select API key (optionally by specific key_id)
     if ($key_id !== '' && validate_id($key_id, 'key_')) {
@@ -1394,7 +1439,7 @@ function handle_stream_generate_node(): void
     sw_close_session();
 
     $prompt_bundle = $is_opening
-        ? build_opening_prompt_bundle($title, $scenario, $user)
+        ? build_opening_prompt_bundle($title, $scenario, $user, $story_opening)
         : build_continuation_prompt_bundle($story_id, $parent_node_id, $choice_text, $check_quarantine, $user, $key_record);
     if ($abort_requested()) {
         exit;
@@ -1441,7 +1486,7 @@ function handle_stream_generate_node(): void
                     exit;
                 }
                 $prompt_bundle = $is_opening
-                    ? build_opening_prompt_bundle($title, $scenario, $user)
+                    ? build_opening_prompt_bundle($title, $scenario, $user, $story_opening)
                     : build_continuation_prompt_bundle($story_id, $parent_node_id, $choice_text, $check_quarantine, $user, $active_key);
                 $system_prompt = $prompt_bundle['system_prompt'];
                 $story_context = $prompt_bundle['story_context'];
@@ -1510,6 +1555,9 @@ function handle_stream_generate_node(): void
     if (empty($paragraphs)) {
         $paragraphs = [$is_opening ? 'The story begins…' : 'The story continues…'];
     }
+    if ($is_opening && !empty($opening_paragraphs)) {
+        $paragraphs = array_merge($opening_paragraphs, $paragraphs);
+    }
 
     $choices = $parsed['choices'] ?? [];
 
@@ -1522,7 +1570,11 @@ function handle_stream_generate_node(): void
 
     if ($is_opening) {
         $result = story_create(h($title), $author_id, $paragraphs, array_merge($ai_meta, [
-            'scenario_essentials' => $prompt_bundle['scenario_essentials'],
+            'scenario_essentials'  => $prompt_bundle['scenario_essentials'],
+            'visibility'           => $story_visibility,
+            'shared_user_ids'      => [],
+            'auto_generate_images' => $auto_generate_images,
+            'auto_image_key_id'    => $auto_generate_images ? $image_key_id : '',
         ]));
         $story_id = $result['story_id'];
         $node_id  = $result['node_id'];
@@ -1542,12 +1594,22 @@ function handle_stream_generate_node(): void
         node_link_choice($story_id, $parent_node_id, $choice_text, $node_id);
     }
 
+    $auto_image_enabled = $is_opening ? $auto_generate_images : story_auto_images_enabled($story_id);
+    $done_url = node_url($story_id, $node_id);
+    if ($auto_image_enabled) {
+        $done_url = app_url('node', [
+            'story' => $story_id,
+            'id' => $node_id,
+            'auto_image' => '1',
+        ]);
+    }
+
     $base = base_url();
     sse_event('done', [
         'ok'         => true,
         'story_id'   => $story_id,
         'node_id'    => $node_id,
-        'url'        => node_url($story_id, $node_id),
+        'url'        => $done_url,
         'ending'     => $parsed['ending'] ?? false,
         'paragraphs' => $paragraphs,
         'choices'    => $choices,
@@ -2339,9 +2401,8 @@ function handle_generate_image(): void
 
     try {
         $image_data = $provider->generateImage($prompt);
-        $image_url = node_save_image($node_id, $image_data);
-        $base = base_url();
-        json_success(['image_url' => $base . $image_url]);
+        $image_path = node_save_image($node_id, $image_data);
+        json_success(['image_url' => image_url($story_id, $node_id, basename($image_path))]);
     } catch (RuntimeException $e) {
         $msg = $e->getMessage();
 
@@ -2364,9 +2425,8 @@ function handle_generate_image(): void
 
                 try {
                     $image_data = $provider->generateImage($prompt);
-                    $image_url = node_save_image($node_id, $image_data);
-                    $base = base_url();
-                    json_success(['image_url' => $base . $image_url]);
+                    $image_path = node_save_image($node_id, $image_data);
+                    json_success(['image_url' => image_url($story_id, $node_id, basename($image_path))]);
                 } catch (RuntimeException $e2) {
                     $msg = $e2->getMessage();
                     if (str_contains($msg, 'HTTP 401') || str_contains($msg, 'HTTP 403')) {
@@ -2557,6 +2617,48 @@ function handle_delete_final_page(): void
     json_success([
         'message' => 'Page deleted.',
         'redirect' => $redirect,
+    ]);
+}
+
+/**
+ * Delete a full story, including all pages and generated images.
+ */
+function handle_delete_story(): void
+{
+    $input = get_json_input();
+    csrf_check($input['_csrf_token'] ?? '');
+
+    $user = current_user();
+    if ($user === null) {
+        json_error('Authentication required.', 401);
+    }
+
+    $story_id = trim((string) ($input['story_id'] ?? ''));
+    if (!validate_id($story_id, 'story_')) {
+        json_error('Invalid story ID.', 400);
+    }
+
+    $root_id = story_find_root($story_id);
+    if ($root_id === null) {
+        json_error('Story not found.', 404);
+    }
+
+    $root = node_read_for_user($story_id, $root_id, $user);
+    if ($root === null) {
+        json_error('Story not found.', 404);
+    }
+
+    if (!story_user_can_manage_access($story_id, $user)) {
+        json_error('Only the story owner or admin can delete this story.', 403);
+    }
+
+    if (!story_delete($story_id)) {
+        json_error('Failed to delete story.', 500);
+    }
+
+    json_success([
+        'message' => 'Story deleted.',
+        'redirect' => app_url('index'),
     ]);
 }
 
@@ -2800,7 +2902,7 @@ function handle_set_story_theme(): void
 }
 
 /**
- * Update the root node's Scenario Essentials text.
+ * Update the root node's Story Guidelines text.
  *
  * Expects: { story_id, scenario_essentials, _csrf_token }
   */
@@ -2826,7 +2928,7 @@ function handle_update_story_scenario(): void
         json_error('Story not found.', 404);
     }
 
-    $root = node_read($story_id, $root_id, true);
+    $root = node_read_for_user($story_id, $root_id, $user);
     if (!$root) {
         json_error('Story not found.', 404);
     }
@@ -2834,7 +2936,7 @@ function handle_update_story_scenario(): void
     $is_author = ($root['author_id'] ?? '') === $user['id'];
     $is_editor = role_level($user['role']) >= role_level('editor');
     if (!$is_author && !$is_editor) {
-        json_error('You do not have permission to update Scenario Essentials.', 403);
+        json_error('You do not have permission to update Story Guidelines.', 403);
     }
 
     $meta = $root['sw_meta'] ?? [];
@@ -2843,8 +2945,145 @@ function handle_update_story_scenario(): void
     node_update_meta($story_id, $root_id, $meta);
 
     json_success([
-        'message' => 'Scenario Essentials updated.',
+        'message' => 'Story Guidelines updated.',
         'scenario_essentials' => $scenario,
+    ]);
+}
+
+/**
+ * Set story visibility.
+ */
+function handle_set_story_visibility(): void
+{
+    $input = get_json_input();
+    csrf_check($input['_csrf_token'] ?? '');
+
+    $user = current_user();
+    if (!$user) {
+        json_error('Login required.', 401);
+    }
+
+    $story_id = trim((string) ($input['story_id'] ?? ''));
+    $visibility = trim((string) ($input['visibility'] ?? ''));
+    if (!validate_id($story_id, 'story_') || !in_array($visibility, ['public', 'private'], true)) {
+        json_error('Invalid story access settings.', 400);
+    }
+
+    if (!story_user_can_manage_access($story_id, $user)) {
+        json_error('Only the story owner or admin can manage access.', 403);
+    }
+
+    $privacy = story_privacy_info($story_id);
+    if ($privacy['root_node_id'] === null) {
+        json_error('Story not found.', 404);
+    }
+
+    if (!story_update_privacy($story_id, $visibility, $privacy['shared_user_ids'], (string) $user['id'])) {
+        json_error('Failed to update story access.', 500);
+    }
+
+    json_success([
+        'message' => $visibility === 'private' ? 'Story is now private.' : 'Story is now public.',
+        'visibility' => $visibility,
+        'shared_users' => story_shared_users($privacy['shared_user_ids']),
+    ]);
+}
+
+/**
+ * Grant a user access to a private story by exact username.
+ */
+function handle_grant_story_access(): void
+{
+    $input = get_json_input();
+    csrf_check($input['_csrf_token'] ?? '');
+
+    $user = current_user();
+    if (!$user) {
+        json_error('Login required.', 401);
+    }
+
+    $story_id = trim((string) ($input['story_id'] ?? ''));
+    $username = trim((string) ($input['username'] ?? ''));
+    if (!validate_id($story_id, 'story_') || $username === '') {
+        json_error('Story and username are required.', 400);
+    }
+
+    if (!story_user_can_manage_access($story_id, $user)) {
+        json_error('Only the story owner or admin can manage access.', 403);
+    }
+
+    $target = user_find_by_username($username);
+    if ($target === null) {
+        json_error('No matching user was found.', 404);
+    }
+
+    $privacy = story_privacy_info($story_id);
+    if ($privacy['root_node_id'] === null) {
+        json_error('Story not found.', 404);
+    }
+
+    $target_id = (string) ($target['id'] ?? '');
+    if ($target_id === '' || $target_id === $privacy['owner_user_id']) {
+        json_error('That user already has access.', 400);
+    }
+
+    $shared = $privacy['shared_user_ids'];
+    if (!in_array($target_id, $shared, true)) {
+        $shared[] = $target_id;
+    }
+
+    if (!story_update_privacy($story_id, $privacy['visibility'], $shared, (string) $user['id'])) {
+        json_error('Failed to grant access.', 500);
+    }
+
+    json_success([
+        'message' => 'Story access granted.',
+        'shared_users' => story_shared_users($shared),
+    ]);
+}
+
+/**
+ * Revoke a user's explicit story access.
+ */
+function handle_revoke_story_access(): void
+{
+    $input = get_json_input();
+    csrf_check($input['_csrf_token'] ?? '');
+
+    $user = current_user();
+    if (!$user) {
+        json_error('Login required.', 401);
+    }
+
+    $story_id = trim((string) ($input['story_id'] ?? ''));
+    $target_id = trim((string) ($input['user_id'] ?? ''));
+    if (!validate_id($story_id, 'story_') || !validate_id($target_id, 'usr_')) {
+        json_error('Invalid story or user ID.', 400);
+    }
+
+    if (!story_user_can_manage_access($story_id, $user)) {
+        json_error('Only the story owner or admin can manage access.', 403);
+    }
+
+    $privacy = story_privacy_info($story_id);
+    if ($privacy['root_node_id'] === null) {
+        json_error('Story not found.', 404);
+    }
+    if ($target_id === $privacy['owner_user_id']) {
+        json_error('The story owner cannot be removed.', 400);
+    }
+
+    $shared = array_values(array_filter($privacy['shared_user_ids'], function ($id) use ($target_id) {
+        return $id !== $target_id;
+    }));
+
+    if (!story_update_privacy($story_id, $privacy['visibility'], $shared, (string) $user['id'])) {
+        json_error('Failed to revoke access.', 500);
+    }
+
+    json_success([
+        'message' => 'Story access revoked.',
+        'shared_users' => story_shared_users($shared),
     ]);
 }
 
@@ -2859,27 +3098,56 @@ function handle_delete_image(): void
     csrf_check($input['_csrf_token'] ?? '');
 
     $user = current_user();
-    if (!$user || role_level($user['role']) < role_level('editor')) {
-        json_error('Editor or admin access required.', 403);
+    if (!$user) {
+        json_error('Login required.', 403);
     }
 
-    $image_url = trim($input['image_url'] ?? '');
-    if ($image_url === '') {
+    $image_url_value = trim((string) ($input['image_url'] ?? ''));
+    $story_id = trim((string) ($input['story_id'] ?? ''));
+    $node_id = trim((string) ($input['node_id'] ?? ''));
+
+    if ($image_url_value === '') {
         json_error('Image URL is required.');
     }
 
-    // Extract just the filename and validate it
-    $filename = basename($image_url);
-    if (!preg_match('/^node_[a-f0-9]{8}-\d+-[a-f0-9]{8}\.(png|jpg|jpeg|gif|webp)$/', $filename)) {
+    $query = parse_url($image_url_value, PHP_URL_QUERY);
+    if (is_string($query) && $query !== '') {
+        $params = [];
+        parse_str($query, $params);
+        $story_id = $story_id !== '' ? $story_id : (string) ($params['story'] ?? '');
+        $node_id = $node_id !== '' ? $node_id : (string) ($params['node'] ?? '');
+        $filename = basename((string) ($params['file'] ?? ''));
+    } else {
+        $filename = basename($image_url_value);
+    }
+
+    if (!validate_id($story_id, 'story_') || !validate_id($node_id, 'node_')) {
+        json_error('Invalid story or page ID.', 400);
+    }
+
+    if (!preg_match('/^' . preg_quote($node_id, '/') . '-\d+-[a-f0-9]{8}\.(png|jpg|jpeg|gif|webp)$/', $filename)) {
         json_error('Invalid image filename.');
     }
 
+    $node = node_read_for_user($story_id, $node_id, $user);
+    if ($node === null) {
+        json_error('Page not found.', 404);
+    }
+
+    $is_author = ($node['author_id'] ?? '') === ($user['id'] ?? '');
+    $is_editor = role_level((string) ($user['role'] ?? 'viewer')) >= role_level('editor');
+    if (!$is_author && !$is_editor) {
+        json_error('You do not have permission to delete this image.', 403);
+    }
+
     $path = sw_root() . '/_assets/images/' . $filename;
-    if (!file_exists($path)) {
+    $real = realpath($path);
+    $images_dir = realpath(sw_root() . '/_assets/images');
+    if ($real === false || $images_dir === false || !str_starts_with($real, $images_dir . DIRECTORY_SEPARATOR) || !is_file($real)) {
         json_error('Image not found.');
     }
 
-    unlink($path);
+    unlink($real);
     json_success(['message' => 'Image deleted.']);
 }
 
@@ -2954,9 +3222,8 @@ function handle_upload_image(): void
     }
 
     $extension = $allowed[$mime];
-    $image_url = node_save_image($node_id, $image_data, $extension);
-    $base = base_url();
-    json_success(['image_url' => $base . $image_url]);
+    $image_path = node_save_image($node_id, $image_data, $extension);
+    json_success(['image_url' => image_url($story_id, $node_id, basename($image_path))]);
 }
 
 /**
@@ -2990,6 +3257,10 @@ function handle_preview_prompt(): void
         if (!validate_id($story_id, 'story_') || !validate_id($parent_node_id, 'node_')) {
             json_error('Invalid story or page ID.', 400);
         }
+    }
+
+    if ($story_id !== "" && validate_id($story_id, "story_") && !story_user_can_access($story_id, $user)) {
+        json_error("Story not found.", 404);
     }
 
     $system_prompt = '';

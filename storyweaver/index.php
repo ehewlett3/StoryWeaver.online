@@ -117,21 +117,32 @@ if (!is_string($announcement_editor_json)) {
     $announcement_editor_json = '[]';
 }
 
-// Get available AI keys for the new story key picker (text-capable keys only)
+// Get available AI keys for the new story model pickers.
 $user_id_for_key = $user ? $user['id'] : null;
 $all_active_keys = [];
+$text_active_keys = [];
+$image_active_keys = [];
 $all_keys = api_keys_read();
 foreach ($all_keys as $k) {
-    if ($k['status'] !== 'active' || empty($k['model_text'])) continue;
-    $visible = ($k['scope'] === 'all')
-            || ($user && $k['scope'] === 'self' && $k['owner_user_id'] === $user['id']);
+    if (($k['status'] ?? '') !== 'active') continue;
+    $visible = (($k['scope'] ?? '') === 'all')
+            || ($user && ($k['scope'] ?? '') === 'self' && ($k['owner_user_id'] ?? '') === $user['id']);
     if (!$visible) continue;
-    $all_active_keys[] = [
-        'id'         => $k['id'],
-        'label'      => $k['label'],
-        'provider'   => $k['provider'],
-        'model_text' => $k['model_text'],
+
+    $entry = [
+        'id'          => $k['id'],
+        'label'       => $k['label'],
+        'provider'    => $k['provider'],
+        'model_text'  => $k['model_text'] ?? '',
+        'model_image' => $k['model_image'] ?? '',
     ];
+    $all_active_keys[] = $entry;
+    if (!empty($entry['model_text'])) {
+        $text_active_keys[] = $entry;
+    }
+    if (!empty($entry['model_image'])) {
+        $image_active_keys[] = $entry;
+    }
 }
 
 /**
@@ -161,7 +172,7 @@ function index_story_card_snippet(array $root_node): string
 /**
  * Return the first root-node image URL for use on the story card.
  */
-function index_story_card_thumbnail_url(string $root_node_id, string $base_url): ?string
+function index_story_card_thumbnail_url(string $story_id, string $root_node_id): ?string
 {
     $images = glob(sw_root() . '/_assets/images/' . $root_node_id . '-*');
     if (empty($images)) {
@@ -169,7 +180,7 @@ function index_story_card_thumbnail_url(string $root_node_id, string $base_url):
     }
 
     sort($images, SORT_NATURAL);
-    return $base_url . '/_assets/images/' . basename($images[0]);
+    return image_url($story_id, $root_node_id, basename($images[0]));
 }
 
 /**
@@ -229,6 +240,11 @@ if (is_dir($stories_dir)) {
             continue;
         }
 
+        if (!story_user_can_access($story_id, $user)) {
+            continue;
+        }
+        $privacy_info = story_privacy_info($story_id);
+
         $author_id = (string) ($root_node['author_id'] ?? 'anonymous');
         $author = $author_id;
         if (str_starts_with($author_id, 'usr_')) {
@@ -252,8 +268,9 @@ if (is_dir($stories_dir)) {
             'node_count' => count($nodes),
             'root_node' => $root_node_id,
             'latest_node' => $can_jump_latest ? (string) ($latest_any['node_id'] ?? '') : null,
-            'thumbnail_url' => index_story_card_thumbnail_url($root_node_id, $base),
+            'thumbnail_url' => index_story_card_thumbnail_url($story_id, $root_node_id),
             'snippet' => index_story_card_snippet($root_node),
+            'visibility' => $privacy_info['visibility'],
         ];
     }
 
@@ -463,7 +480,12 @@ if (is_dir($stories_dir)) {
                             <div class="sw-story-item-body">
                                 <div class="sw-story-item-head">
                                      <div>
-                                         <div class="sw-story-item-title"><?= h($story['title']) ?></div>
+                                         <div class="sw-story-item-title">
+                                             <?= h($story['title']) ?>
+                                             <?php if (($story['visibility'] ?? 'public') === 'private'): ?>
+                                                 <span class="sw-badge sw-badge-muted">Private</span>
+                                             <?php endif; ?>
+                                         </div>
                                          <div class="sw-story-item-meta">
                                              by <?= h($story['author']) ?>
                                              · <?= $story['node_count'] ?> page<?= $story['node_count'] !== 1 ? 's' : '' ?>
@@ -515,6 +537,8 @@ if (is_dir($stories_dir)) {
                 <input type="hidden" name="action" value="new_story">
                 <input type="hidden" name="_csrf_token" value="<?= h(csrf_token()) ?>">
                 <input type="hidden" name="use_ai" id="sw-use-ai" value="1">
+                <input type="hidden" name="story_visibility" id="sw-new-story-visibility" value="public">
+                <input type="hidden" name="auto_generate_images" id="sw-new-story-auto-images" value="0">
 
                 <div class="sw-form-group">
                     <label for="story-title">Story Title</label>
@@ -524,29 +548,69 @@ if (is_dir($stories_dir)) {
                 </div>
 
                 <div class="sw-form-group">
-                    <label for="scenario-essentials">Scenario Essentials <span class="sw-text-muted">(optional)</span></label>
+                    <label for="story-opening">Story Opening <span class="sw-text-muted">(optional)</span></label>
+                    <textarea id="story-opening" name="story_opening" class="sw-input"
+                              rows="5" maxlength="6000"
+                              placeholder="Write the first lines or paragraphs exactly as the story should begin."></textarea>
+                    <span class="sw-text-muted sw-text-sm">This text becomes the start of the first page; generated text will be appended after it.</span>
+                </div>
+
+                <div class="sw-form-group">
+                    <label for="scenario-essentials">Story Guidelines <span class="sw-text-muted">(optional)</span></label>
                     <textarea id="scenario-essentials" name="scenario_essentials" class="sw-input"
                               rows="6" maxlength="4000"
                               placeholder="e.g. Medieval fantasy, the hero is a young blacksmith, dark forest setting…"></textarea>
                     <span class="sw-text-muted sw-text-sm">Help the AI set the scene. Leave blank for a surprise.</span>
                 </div>
 
-                <?php if (count($all_active_keys) > 1): ?>
                 <div class="sw-form-group">
-                    <label for="sw-key-picker-modal">Text AI Model</label>
-                    <select id="sw-key-picker-modal" name="key_id" class="sw-input sw-input-sm">
-                        <?php foreach ($all_active_keys as $ak): ?>
-                            <option value="<?= h($ak['id']) ?>"><?= h($ak['label']) ?> — <?= h($ak['model_text']) ?></option>
-                        <?php endforeach; ?>
-                    </select>
+                    <label>AI Models</label>
+                    <div class="sw-new-story-model-grid">
+                        <div>
+                            <label for="sw-key-picker-modal" class="sw-text-muted sw-text-sm">Text</label>
+                            <select id="sw-key-picker-modal" name="key_id" class="sw-input sw-input-sm" <?= empty($text_active_keys) ? 'disabled' : '' ?>>
+                                <?php if (empty($text_active_keys)): ?>
+                                    <option value="">No text model available</option>
+                                <?php else: ?>
+                                    <?php foreach ($text_active_keys as $ak): ?>
+                                        <option value="<?= h($ak['id']) ?>"><?= h($ak['label']) ?> — <?= h($ak['model_text']) ?></option>
+                                    <?php endforeach; ?>
+                                <?php endif; ?>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="sw-image-key-picker-modal" class="sw-text-muted sw-text-sm">Image</label>
+                            <select id="sw-image-key-picker-modal" name="image_key_id" class="sw-input sw-input-sm" <?= empty($image_active_keys) ? 'disabled' : '' ?>>
+                                <?php if (empty($image_active_keys)): ?>
+                                    <option value="">No image model available</option>
+                                <?php else: ?>
+                                    <?php foreach ($image_active_keys as $ak): ?>
+                                        <option value="<?= h($ak['id']) ?>"><?= h($ak['label']) ?> — <?= h($ak['model_image']) ?></option>
+                                    <?php endforeach; ?>
+                                <?php endif; ?>
+                            </select>
+                        </div>
+                    </div>
                 </div>
-                <?php endif; ?>
+
+                <div class="sw-new-story-toggle-row">
+                    <button type="button" id="sw-new-story-private-toggle"
+                            class="sw-btn sw-btn-sm sw-btn-secondary"
+                            data-state="public" <?= $user ? '' : 'disabled' ?>>
+                        Public Story
+                    </button>
+                    <button type="button" id="sw-new-story-auto-image-toggle"
+                            class="sw-btn sw-btn-sm sw-btn-secondary"
+                            data-state="off" <?= (!empty($image_active_keys) && $user) ? '' : 'disabled' ?>>
+                        Auto Pictures Off
+                    </button>
+                </div>
 
                 <div class="sw-modal-actions">
                     <button type="button" class="sw-btn sw-btn-secondary sw-modal-cancel">Cancel</button>
                     <button type="button" class="sw-btn sw-btn-secondary" id="sw-start-manual"
                             title="Skip AI — write the opening yourself">✏️ Start Manually</button>
-                    <button type="submit" class="sw-btn sw-btn-primary">✨ Generate with AI →</button>
+                    <button type="submit" class="sw-btn sw-btn-primary" <?= empty($text_active_keys) ? 'disabled title="No text AI model is available"' : '' ?>>✨ Generate with AI →</button>
                 </div>
             </form>
         </div>

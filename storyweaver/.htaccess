@@ -13,8 +13,14 @@ DirectoryIndex index.php index.html
   # Deny access to _data/
   RewriteRule ^_data/ - [F,L]
 
+  # Deny direct access to raw story node files
+  RewriteRule ^stories/ - [F,L]
+
   # Deny access to quarantine/
   RewriteRule ^quarantine/ - [F,L]
+
+  # Deny direct access to generated/uploaded story images
+  RewriteRule ^_assets/images/ - [F,L]
 
   # Deny access to _mail/
   RewriteRule ^_mail/ - [F,L]

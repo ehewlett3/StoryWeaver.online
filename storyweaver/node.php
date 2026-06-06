@@ -138,6 +138,10 @@ if ($user && $is_root_node) {
     $created_by = $root_meta['created_by'] ?? '';
     $can_change_theme = ($created_by === $user['id'] || $user['role'] === 'admin');
 }
+$story_privacy = story_privacy_info($story_id);
+$can_manage_story_access = $is_root_node && story_user_can_manage_access($story_id, $user);
+$can_delete_story = $can_manage_story_access;
+$story_shared_users = story_shared_users($story_privacy['shared_user_ids'] ?? []);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -191,6 +195,9 @@ if ($user && $is_root_node) {
                     <a href="<?= h(node_url($story_id, $latest_node_id)) ?>"
                        class="sw-btn sw-btn-sm sw-btn-secondary">🕒 Latest Page</a>
                 <?php endif; ?>
+                <?php if (($story_privacy['visibility'] ?? 'public') === 'private'): ?>
+                    <span class="sw-btn sw-btn-sm sw-btn-secondary sw-story-private-indicator" title="This story is private">Private</span>
+                <?php endif; ?>
                 <?php if ($can_flag): ?>
                     <button type="button"
                             id="sw-flag-concern-btn"
@@ -203,58 +210,6 @@ if ($user && $is_root_node) {
                 <?php endif; ?>
             </div>
         </div>
-
-        <?php if ($is_root_node && ($story_scenario_essentials !== '' || $can_edit)): ?>
-            <details class="sw-story-scenario" id="sw-story-scenario-details">
-                <summary class="sw-story-scenario-summary">Scenario Essentials</summary>
-                <?php if ($can_edit): ?>
-                    <div class="sw-story-scenario-editor">
-                        <textarea id="sw-story-scenario-input"
-                                  class="sw-input"
-                                  rows="8"
-                                  maxlength="4000"
-                                  data-story-id="<?= h($story_id) ?>"
-                                  data-original-value="<?= h($story_scenario_essentials) ?>"
-                                  placeholder="Add enduring story setup, tone, characters, or constraints that should stay with the story."><?= h($story_scenario_essentials) ?></textarea>
-                        <div class="sw-story-scenario-actions">
-                            <button type="button" id="sw-save-story-scenario-btn" class="sw-btn sw-btn-sm sw-btn-secondary">
-                                Save Scenario Essentials
-                            </button>
-                            <button type="button" id="sw-cancel-story-scenario-btn" class="sw-btn sw-btn-sm sw-btn-secondary">
-                                Cancel
-                            </button>
-                            <span id="sw-story-scenario-status" class="sw-editor-status"></span>
-                        </div>
-                    </div>
-                <?php else: ?>
-                    <div class="sw-story-scenario-content"><?= nl2br(h($story_scenario_essentials)) ?></div>
-                <?php endif; ?>
-            </details>
-        <?php endif; ?>
-
-        <?php if ($can_rename_story): ?>
-            <details class="sw-story-title" id="sw-story-title-details">
-                <summary class="sw-story-title-summary">Story Title</summary>
-                <div class="sw-story-title-editor">
-                    <input type="text"
-                           id="sw-story-title-input"
-                           class="sw-input"
-                           maxlength="200"
-                           data-story-id="<?= h($story_id) ?>"
-                           data-original-value="<?= h($editable_story_title) ?>"
-                           value="<?= h($editable_story_title) ?>">
-                    <div class="sw-story-title-actions">
-                        <button type="button" id="sw-save-story-title-btn" class="sw-btn sw-btn-sm sw-btn-secondary">
-                            Save Story Title
-                        </button>
-                        <button type="button" id="sw-cancel-story-title-btn" class="sw-btn sw-btn-sm sw-btn-secondary">
-                            Cancel
-                        </button>
-                        <span id="sw-story-title-status" class="sw-editor-status"></span>
-                    </div>
-                </div>
-            </details>
-        <?php endif; ?>
 
         <?php if ($is_quarantined): ?>
             <div class="sw-alert sw-alert-warning">
@@ -338,11 +293,11 @@ if ($user && $is_root_node) {
                 $image_glob = glob(sw_root() . '/_assets/images/' . $node_id . '-*');
                 if (!empty($image_glob)) {
                     foreach ($image_glob as $img_path) {
-                        $img_url = $base . '/_assets/images/' . basename($img_path);
+                        $img_url = image_url($story_id, $node_id, basename($img_path));
                         echo '<div class="sw-image-wrap">';
                         echo '<img src="' . h($img_url) . '" alt="Story illustration" class="sw-node-image">';
                         if ($can_edit) {
-                            echo '<button type="button" class="sw-image-delete-btn" data-image-url="' . h($img_url) . '" title="Delete image">&times;</button>';
+                            echo '<button type="button" class="sw-image-delete-btn" data-story-id="' . h($story_id) . '" data-node-id="' . h($node_id) . '" data-image-url="' . h($img_url) . '" title="Delete image">&times;</button>';
                         }
                         echo '</div>';
                     }
@@ -360,7 +315,7 @@ if ($user && $is_root_node) {
                     <?php elseif ($has_image_model && $has_images): ?>
                         <button type="button" id="sw-regen-image-btn" class="sw-btn sw-btn-sm sw-btn-secondary"
                                 data-story-id="<?= h($story_id) ?>" data-node-id="<?= h($node_id) ?>"
-                                data-existing-image="<?= h($base . '/_assets/images/' . basename($image_glob[0])) ?>">
+                                data-existing-image="<?= h(image_url($story_id, $node_id, basename($image_glob[0]))) ?>">
                             🖼️ Regenerate Image
                         </button>
                     <?php endif; ?>
@@ -576,11 +531,104 @@ if ($user && $is_root_node) {
             </div>
         <?php endif; ?>
 
-        <?php if ($can_change_theme): ?>
-        <!-- Per-story theme picker (story creator / admin on root node) -->
-        <section class="sw-story-theme-section" style="margin-top:1rem">
+        <?php if (($is_root_node && ($story_scenario_essentials !== '' || $can_edit)) || $can_rename_story || $can_manage_story_access || $can_change_theme || $can_delete_story): ?>
+        <div class="sw-story-bottom-controls">
+            <span class="sw-story-settings-label">Story Settings</span>
+            <?php if ($is_root_node && ($story_scenario_essentials !== '' || $can_edit)): ?>
+                <details class="sw-story-scenario" id="sw-story-scenario-details">
+                    <summary class="sw-btn sw-btn-sm sw-btn-secondary">📜 Guidelines</summary>
+                    <?php if ($can_edit): ?>
+                        <div class="sw-story-scenario-editor">
+                            <textarea id="sw-story-scenario-input"
+                                      class="sw-input"
+                                      rows="8"
+                                      maxlength="4000"
+                                      data-story-id="<?= h($story_id) ?>"
+                                      data-original-value="<?= h($story_scenario_essentials) ?>"
+                                      placeholder="Add enduring story setup, tone, characters, or constraints that should stay with the story."><?= h($story_scenario_essentials) ?></textarea>
+                            <div class="sw-story-scenario-actions">
+                                <button type="button" id="sw-save-story-scenario-btn" class="sw-btn sw-btn-sm sw-btn-secondary">
+                                    Save Story Guidelines
+                                </button>
+                                <button type="button" id="sw-cancel-story-scenario-btn" class="sw-btn sw-btn-sm sw-btn-secondary">
+                                    Cancel
+                                </button>
+                                <span id="sw-story-scenario-status" class="sw-editor-status"></span>
+                            </div>
+                        </div>
+                    <?php else: ?>
+                        <div class="sw-story-scenario-content"><?= nl2br(h($story_scenario_essentials)) ?></div>
+                    <?php endif; ?>
+                </details>
+            <?php endif; ?>
+
+            <?php if ($can_rename_story): ?>
+                <details class="sw-story-title" id="sw-story-title-details">
+                    <summary class="sw-btn sw-btn-sm sw-btn-secondary">✏️ Title</summary>
+                    <div class="sw-story-title-editor">
+                        <input type="text"
+                               id="sw-story-title-input"
+                               class="sw-input"
+                               maxlength="200"
+                               data-story-id="<?= h($story_id) ?>"
+                               data-original-value="<?= h($editable_story_title) ?>"
+                               value="<?= h($editable_story_title) ?>">
+                        <div class="sw-story-title-actions">
+                            <button type="button" id="sw-save-story-title-btn" class="sw-btn sw-btn-sm sw-btn-secondary">
+                                Save Story Title
+                            </button>
+                            <button type="button" id="sw-cancel-story-title-btn" class="sw-btn sw-btn-sm sw-btn-secondary">
+                                Cancel
+                            </button>
+                            <span id="sw-story-title-status" class="sw-editor-status"></span>
+                        </div>
+                    </div>
+                </details>
+            <?php endif; ?>
+
+            <?php if ($can_manage_story_access): ?>
+                <details class="sw-story-access" id="sw-story-access-details">
+                    <summary class="sw-btn sw-btn-sm sw-btn-secondary">🔒 Access</summary>
+                    <div class="sw-story-title-editor">
+                        <div class="sw-form-group">
+                            <label for="sw-story-visibility-select">Visibility</label>
+                            <select id="sw-story-visibility-select" class="sw-input" data-story-id="<?= h($story_id) ?>">
+                                <option value="public" <?= ($story_privacy['visibility'] ?? 'public') === 'public' ? 'selected' : '' ?>>Public</option>
+                                <option value="private" <?= ($story_privacy['visibility'] ?? 'public') === 'private' ? 'selected' : '' ?>>Private</option>
+                            </select>
+                        </div>
+                        <div class="sw-story-title-actions">
+                            <button type="button" id="sw-save-story-visibility-btn" class="sw-btn sw-btn-sm sw-btn-secondary">Save Visibility</button>
+                            <span id="sw-story-access-status" class="sw-editor-status"></span>
+                        </div>
+                        <div class="sw-form-group" style="margin-top:0.75rem">
+                            <label for="sw-story-share-username">Shared users</label>
+                            <div class="sw-inline-form">
+                                <input type="text" id="sw-story-share-username" class="sw-input" maxlength="80" placeholder="Exact username" data-story-id="<?= h($story_id) ?>">
+                                <button type="button" id="sw-grant-story-access-btn" class="sw-btn sw-btn-sm sw-btn-secondary">Grant Access</button>
+                            </div>
+                        </div>
+                        <div id="sw-story-shared-users" class="sw-shared-users" data-story-id="<?= h($story_id) ?>">
+                            <?php if (empty($story_shared_users)): ?>
+                                <p class="sw-text-muted">No shared users yet.</p>
+                            <?php else: ?>
+                                <?php foreach ($story_shared_users as $shared_user): ?>
+                                    <div class="sw-shared-user-row" data-user-id="<?= h($shared_user['id']) ?>">
+                                        <span><?= h($shared_user['username']) ?></span>
+                                        <button type="button" class="sw-btn sw-btn-sm sw-btn-secondary sw-revoke-story-access-btn" data-user-id="<?= h($shared_user['id']) ?>">Remove</button>
+                                    </div>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </details>
+            <?php endif; ?>
+
+            <?php if ($can_change_theme): ?>
+            <!-- Per-story theme picker (story creator / admin on root node) -->
+            <section class="sw-story-theme-section">
             <details>
-                <summary class="sw-btn sw-btn-sm sw-btn-secondary">🎨 Story Theme</summary>
+                <summary class="sw-btn sw-btn-sm sw-btn-secondary">🎨 Theme</summary>
                 <div style="margin-top:0.5rem">
                     <select id="sw-story-theme-select" class="sw-input" data-story-id="<?= h($story_id) ?>">
                         <option value="">Default (site theme)</option>
@@ -598,7 +646,19 @@ if ($user && $is_root_node) {
                     </button>
                 </div>
             </details>
-        </section>
+            </section>
+            <?php endif; ?>
+
+            <?php if ($can_delete_story): ?>
+                <button type="button"
+                        id="sw-delete-story-btn"
+                        class="sw-btn sw-btn-sm sw-btn-danger"
+                        data-story-id="<?= h($story_id) ?>"
+                        data-story-title="<?= h($editable_story_title) ?>">
+                    🗑️ Delete
+                </button>
+            <?php endif; ?>
+        </div>
         <?php endif; ?>
 
         <!-- Footer -->

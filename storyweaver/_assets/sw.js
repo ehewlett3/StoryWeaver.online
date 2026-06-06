@@ -156,8 +156,9 @@ document.addEventListener('DOMContentLoaded', function () {
      * Get the selected image-generation key ID.
      */
     function getSelectedImageKeyId() {
-        var picker = document.getElementById('sw-image-key-picker');
-        if (!picker) return '';
+        var picker = document.getElementById('sw-image-key-picker')
+                  || document.getElementById('sw-image-key-picker-modal');
+        if (!picker || picker.disabled) return '';
         return picker.value;
     }
 
@@ -283,7 +284,8 @@ document.addEventListener('DOMContentLoaded', function () {
             document.getElementById('sw-key-picker-modal')
         ];
         var imagePickers = [
-            document.getElementById('sw-image-key-picker')
+            document.getElementById('sw-image-key-picker'),
+            document.getElementById('sw-image-key-picker-modal')
         ];
 
         function restoreAndListen(pickers, storageKey) {
@@ -432,6 +434,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         payload._csrf_token = csrfValue;
         payload.key_id = payload.key_id || getSelectedTextKeyId();
+        payload.image_key_id = payload.image_key_id || getSelectedImageKeyId();
         payload.request_id = requestId;
 
         // Persist text key choice for next time
@@ -942,6 +945,47 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    var deleteStoryBtn = document.getElementById('sw-delete-story-btn');
+    if (deleteStoryBtn) {
+        deleteStoryBtn.addEventListener('click', function () {
+            var storyTitle = deleteStoryBtn.getAttribute('data-story-title') || 'this story';
+            if (!confirm('Delete "' + storyTitle + '" and all of its pages? This cannot be undone.')) {
+                return;
+            }
+
+            var storyId = deleteStoryBtn.getAttribute('data-story-id');
+            var originalLabel = deleteStoryBtn.textContent;
+
+            deleteStoryBtn.disabled = true;
+            deleteStoryBtn.textContent = 'Deleting...';
+
+            fetch(apiBase + '/api?action=delete_story', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    story_id: storyId,
+                    _csrf_token: csrfValue
+                })
+            })
+            .then(function (res) { return res.json(); })
+            .then(function (data) {
+                if (data.ok && data.redirect) {
+                    window.location.href = data.redirect;
+                    return;
+                }
+
+                showFlash(data.error || 'Failed to delete the story.', 'error');
+                deleteStoryBtn.disabled = false;
+                deleteStoryBtn.textContent = originalLabel;
+            })
+            .catch(function (err) {
+                showFlash('Error: ' + err.message, 'error');
+                deleteStoryBtn.disabled = false;
+                deleteStoryBtn.textContent = originalLabel;
+            });
+        });
+    }
+
     var pendingChoicesModal = document.getElementById('sw-pending-choice-modal');
     var openPendingChoicesBtn = document.getElementById('sw-open-pending-choices-btn');
     var closePendingChoicesBtn = document.getElementById('sw-close-pending-choices-btn');
@@ -1315,6 +1359,8 @@ document.addEventListener('DOMContentLoaded', function () {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     image_url: imageUrl,
+                    story_id: btn.getAttribute('data-story-id') || imageActionStoryId,
+                    node_id: btn.getAttribute('data-node-id') || imageActionNodeId,
                     _csrf_token: csrfValue
                 })
             })
@@ -1353,6 +1399,8 @@ document.addEventListener('DOMContentLoaded', function () {
             delBtn.type = 'button';
             delBtn.className = 'sw-image-delete-btn';
             delBtn.setAttribute('data-image-url', imageUrl);
+            delBtn.setAttribute('data-story-id', imageActionStoryId);
+            delBtn.setAttribute('data-node-id', imageActionNodeId);
             delBtn.title = 'Delete image';
             delBtn.textContent = '×';
             bindDeleteImageButton(delBtn);
@@ -1639,6 +1687,27 @@ document.addEventListener('DOMContentLoaded', function () {
     document.querySelectorAll('.sw-image-delete-btn').forEach(bindDeleteImageButton);
     updateImageActionButtons();
 
+    function maybeStartAutoImageGeneration() {
+        var params = new URLSearchParams(window.location.search || '');
+        if (params.get('auto_image') !== '1') {
+            return;
+        }
+
+        params.delete('auto_image');
+        var cleanUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '') + window.location.hash;
+        if (window.history && window.history.replaceState) {
+            window.history.replaceState(null, '', cleanUrl);
+        }
+
+        window.setTimeout(function () {
+            var btn = document.getElementById('sw-gen-image-btn');
+            if (btn && !btn.disabled && getCurrentNodeImageUrl() === '') {
+                btn.click();
+            }
+        }, 350);
+    }
+    maybeStartAutoImageGeneration();
+
     function showImageCompareModal(oldUrl, newUrl) {
         // Create modal overlay
         var overlay = document.createElement('div');
@@ -1674,6 +1743,8 @@ document.addEventListener('DOMContentLoaded', function () {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         image_url: deleteUrl,
+                        story_id: imageActionStoryId,
+                        node_id: imageActionNodeId,
                         _csrf_token: csrfValue
                     })
                 }).then(function () {
@@ -1728,6 +1799,34 @@ document.addEventListener('DOMContentLoaded', function () {
             });
         }
 
+        var privateToggleBtn = document.getElementById('sw-new-story-private-toggle');
+        var visibilityInput = document.getElementById('sw-new-story-visibility');
+        if (privateToggleBtn && visibilityInput) {
+            privateToggleBtn.addEventListener('click', function () {
+                if (privateToggleBtn.disabled) return;
+                var next = privateToggleBtn.getAttribute('data-state') === 'private' ? 'public' : 'private';
+                privateToggleBtn.setAttribute('data-state', next);
+                visibilityInput.value = next;
+                privateToggleBtn.textContent = next === 'private' ? 'Private Story' : 'Public Story';
+                privateToggleBtn.classList.toggle('sw-btn-primary', next === 'private');
+                privateToggleBtn.classList.toggle('sw-btn-secondary', next !== 'private');
+            });
+        }
+
+        var autoImageToggleBtn = document.getElementById('sw-new-story-auto-image-toggle');
+        var autoImageInput = document.getElementById('sw-new-story-auto-images');
+        if (autoImageToggleBtn && autoImageInput) {
+            autoImageToggleBtn.addEventListener('click', function () {
+                if (autoImageToggleBtn.disabled) return;
+                var next = autoImageToggleBtn.getAttribute('data-state') === 'on' ? 'off' : 'on';
+                autoImageToggleBtn.setAttribute('data-state', next);
+                autoImageInput.value = next === 'on' ? '1' : '0';
+                autoImageToggleBtn.textContent = next === 'on' ? 'Auto Pictures On' : 'Auto Pictures Off';
+                autoImageToggleBtn.classList.toggle('sw-btn-primary', next === 'on');
+                autoImageToggleBtn.classList.toggle('sw-btn-secondary', next !== 'on');
+            });
+        }
+
         // "Start Manually" button — submit form with use_ai=0
         var startManualBtn = document.getElementById('sw-start-manual');
         if (startManualBtn) {
@@ -1747,6 +1846,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (useAiInput && useAiInput.value === '0') return; // manual mode — let form submit
 
                 var titleInput = newStoryForm.querySelector('[name="title"]');
+                var openingInput = newStoryForm.querySelector('[name="story_opening"]');
                 var scenarioInput = newStoryForm.querySelector('[name="scenario_essentials"]');
                 var title = titleInput ? titleInput.value.trim() : '';
                 if (title === '') return; // let browser validation handle
@@ -1754,11 +1854,18 @@ document.addEventListener('DOMContentLoaded', function () {
                 e.preventDefault();
                 newStoryModal.classList.remove('sw-modal-open');
 
+                var visibilityInput = document.getElementById('sw-new-story-visibility');
+                var autoImageInput = document.getElementById('sw-new-story-auto-images');
+
                 startStreamingGeneration({
                     title: title,
                     parent_node_id: '',
                     choice_text: '',
-                    scenario_essentials: scenarioInput ? scenarioInput.value.trim() : ''
+                    story_opening: openingInput ? openingInput.value.trim() : '',
+                    scenario_essentials: scenarioInput ? scenarioInput.value.trim() : '',
+                    story_visibility: visibilityInput ? visibilityInput.value : 'public',
+                    auto_generate_images: autoImageInput ? autoImageInput.value === '1' : false,
+                    image_key_id: getSelectedImageKeyId()
                 }, {
                     onFallback: function () {
                         newStoryForm.submit();
@@ -3102,6 +3209,20 @@ document.addEventListener('DOMContentLoaded', function () {
     /* ================================================================
      * Story theme picker
      * ================================================================ */
+    document.querySelectorAll('.sw-story-bottom-controls details').forEach(function (details) {
+        details.addEventListener('toggle', function () {
+            if (!details.open) {
+                return;
+            }
+
+            document.querySelectorAll('.sw-story-bottom-controls details[open]').forEach(function (other) {
+                if (other !== details) {
+                    other.open = false;
+                }
+            });
+        });
+    });
+
     const storyScenarioBtn = document.getElementById('sw-save-story-scenario-btn');
     if (storyScenarioBtn) {
         storyScenarioBtn.addEventListener('click', async function () {
@@ -3140,10 +3261,10 @@ document.addEventListener('DOMContentLoaded', function () {
                     if (scenarioDetails) {
                         scenarioDetails.open = false;
                     }
-                    showFlash(data.message || 'Scenario Essentials saved.', 'success');
+                    showFlash(data.message || 'Story Guidelines saved.', 'success');
                 } else {
                     if (status) {
-                        status.textContent = data.error || 'Failed to save Scenario Essentials.';
+                        status.textContent = data.error || 'Failed to save Story Guidelines.';
                         status.className = 'sw-editor-status sw-editor-status-error';
                     }
                 }
@@ -3285,6 +3406,159 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         });
     }
+
+    /* ==================================================================
+     * Story Access Controls
+     * ================================================================*/
+
+    function renderSharedUsers(container, users) {
+        if (!container) return;
+        container.textContent = '';
+        if (!Array.isArray(users) || users.length === 0) {
+            var empty = document.createElement('p');
+            empty.className = 'sw-text-muted';
+            empty.textContent = 'No shared users yet.';
+            container.appendChild(empty);
+            return;
+        }
+
+        users.forEach(function (user) {
+            var row = document.createElement('div');
+            row.className = 'sw-shared-user-row';
+            row.setAttribute('data-user-id', user.id || '');
+
+            var name = document.createElement('span');
+            name.textContent = user.username || user.id || 'User';
+            row.appendChild(name);
+
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'sw-btn sw-btn-sm sw-btn-secondary sw-revoke-story-access-btn';
+            btn.setAttribute('data-user-id', user.id || '');
+            btn.textContent = 'Remove';
+            row.appendChild(btn);
+
+            container.appendChild(row);
+        });
+        bindRevokeStoryAccessButtons();
+    }
+
+    function setStoryAccessStatus(message, kind) {
+        var status = document.getElementById('sw-story-access-status');
+        if (!status) return;
+        status.textContent = message || '';
+        status.className = 'sw-editor-status' + (kind ? ' sw-editor-status-' + kind : '');
+    }
+
+    var saveVisibilityBtn = document.getElementById('sw-save-story-visibility-btn');
+    if (saveVisibilityBtn) {
+        saveVisibilityBtn.addEventListener('click', async function () {
+            var select = document.getElementById('sw-story-visibility-select');
+            var storyId = select ? select.getAttribute('data-story-id') : '';
+            saveVisibilityBtn.disabled = true;
+            saveVisibilityBtn.textContent = 'Saving...';
+            try {
+                var resp = await fetch(apiBase + '/api?action=set_story_visibility', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        _csrf_token: csrfValue,
+                        story_id: storyId,
+                        visibility: select ? select.value : 'public'
+                    })
+                });
+                var data = await resp.json();
+                if (data.ok) {
+                    setStoryAccessStatus(data.message || 'Visibility updated.', 'success');
+                    window.location.reload();
+                } else {
+                    setStoryAccessStatus(data.error || 'Failed to update visibility.', 'error');
+                }
+            } catch (err) {
+                setStoryAccessStatus('Error updating visibility: ' + err.message, 'error');
+            } finally {
+                saveVisibilityBtn.disabled = false;
+                saveVisibilityBtn.textContent = 'Save Visibility';
+            }
+        });
+    }
+
+    var grantAccessBtn = document.getElementById('sw-grant-story-access-btn');
+    if (grantAccessBtn) {
+        grantAccessBtn.addEventListener('click', async function () {
+            var input = document.getElementById('sw-story-share-username');
+            var usersContainer = document.getElementById('sw-story-shared-users');
+            var username = input ? input.value.trim() : '';
+            var storyId = input ? input.getAttribute('data-story-id') : '';
+            if (username === '') {
+                setStoryAccessStatus('Enter an exact username.', 'error');
+                return;
+            }
+
+            grantAccessBtn.disabled = true;
+            grantAccessBtn.textContent = 'Granting...';
+            try {
+                var resp = await fetch(apiBase + '/api?action=grant_story_access', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        _csrf_token: csrfValue,
+                        story_id: storyId,
+                        username: username
+                    })
+                });
+                var data = await resp.json();
+                if (data.ok) {
+                    if (input) input.value = '';
+                    renderSharedUsers(usersContainer, data.shared_users || []);
+                    setStoryAccessStatus(data.message || 'Access granted.', 'success');
+                } else {
+                    setStoryAccessStatus(data.error || 'Failed to grant access.', 'error');
+                }
+            } catch (err) {
+                setStoryAccessStatus('Error granting access: ' + err.message, 'error');
+            } finally {
+                grantAccessBtn.disabled = false;
+                grantAccessBtn.textContent = 'Grant Access';
+            }
+        });
+    }
+
+    function bindRevokeStoryAccessButtons() {
+        document.querySelectorAll('.sw-revoke-story-access-btn').forEach(function (btn) {
+            if (btn.dataset.bound === '1') return;
+            btn.dataset.bound = '1';
+            btn.addEventListener('click', async function () {
+                var usersContainer = document.getElementById('sw-story-shared-users');
+                var storyId = usersContainer ? usersContainer.getAttribute('data-story-id') : '';
+                var userId = btn.getAttribute('data-user-id') || '';
+                btn.disabled = true;
+                try {
+                    var resp = await fetch(apiBase + '/api?action=revoke_story_access', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            _csrf_token: csrfValue,
+                            story_id: storyId,
+                            user_id: userId
+                        })
+                    });
+                    var data = await resp.json();
+                    if (data.ok) {
+                        renderSharedUsers(usersContainer, data.shared_users || []);
+                        setStoryAccessStatus(data.message || 'Access revoked.', 'success');
+                    } else {
+                        setStoryAccessStatus(data.error || 'Failed to revoke access.', 'error');
+                        btn.disabled = false;
+                    }
+                } catch (err) {
+                    setStoryAccessStatus('Error revoking access: ' + err.message, 'error');
+                    btn.disabled = false;
+                }
+            });
+        });
+    }
+    bindRevokeStoryAccessButtons();
 
     /* ==================================================================
      * Admin — Prompt Preview

@@ -11,6 +11,10 @@
 # Environment
 .env
 
+# Local Codex handoff notes
+/AGENTS.md
+/docs/HANDOFF.md
+
 # Site-root files are deployment-specific; the app itself lives in storyweaver/
 /index.html
 /sw-background.png

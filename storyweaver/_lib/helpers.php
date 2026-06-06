@@ -371,6 +371,18 @@ function edit_url(string $story_id, string $node_id): string
     return app_url('edit', ['story' => $story_id, 'id' => $node_id]);
 }
 
+/**
+ * Build a URL for serving a story image through access checks.
+ */
+function image_url(string $story_id, string $node_id, string $filename): string
+{
+    return app_url('image', [
+        'story' => $story_id,
+        'node' => $node_id,
+        'file' => $filename,
+    ]);
+}
+
 /* ------------------------------------------------------------------
  * CSRF Protection
  * ----------------------------------------------------------------*/
@@ -621,7 +633,7 @@ function sw_ensure_directories(): void
     $root = sw_root();
     $deny_htaccess = "# Deny all direct HTTP access to this directory.\nRequire all denied\n";
 
-    $protected_dirs = ['_data', '_mail', 'quarantine'];
+    $protected_dirs = ['_data', '_mail', 'quarantine', 'stories', '_assets/images'];
     foreach ($protected_dirs as $dir) {
         $dir_path = $root . '/' . $dir;
         if (!is_dir($dir_path)) {
@@ -634,7 +646,7 @@ function sw_ensure_directories(): void
     }
 
     // Non-protected data directories
-    $open_dirs = ['stories', '_assets/images'];
+    $open_dirs = ['stories'];
     foreach ($open_dirs as $dir) {
         $dir_path = $root . '/' . $dir;
         if (!is_dir($dir_path)) {

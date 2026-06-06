@@ -47,15 +47,19 @@ function play_ai_provider(array $key_record, ?array $user = null): AIProvider
 /**
  * Create a new story with a root node.
  *
- * Expects POST fields: title (required), scenario_essentials (optional), use_ai (optional).
+ * Expects POST fields: title (required), story_opening/scenario_essentials (optional), use_ai (optional).
  * If AI is available and not explicitly skipped, generates opening via AI.
  * Otherwise creates a blank root node and redirects to edit.php.
  */
 function handle_new_story(): void
 {
     $title    = normalize_story_title((string) ($_POST['title'] ?? ''));
+    $story_opening = (string) ($_POST['story_opening'] ?? '');
     $scenario = normalize_scenario_essentials((string) ($_POST['scenario_essentials'] ?? ''));
     $use_ai   = ($_POST['use_ai'] ?? '1') === '1';
+    $story_visibility = (string) ($_POST['story_visibility'] ?? 'public');
+    $auto_generate_images = ($_POST['auto_generate_images'] ?? '0') === '1';
+    $image_key_id = trim((string) ($_POST['image_key_id'] ?? ''));
 
     if ($title === '') {
         flash('error', 'A story title is required.');
@@ -65,6 +69,10 @@ function handle_new_story(): void
     $user = current_user();
     $author_id = $user ? $user['id'] : 'anonymous';
     $user_id   = $user ? $user['id'] : null;
+    $story_visibility = ($user && $story_visibility === 'private') ? 'private' : 'public';
+    $auto_generate_images = $user !== null && $auto_generate_images;
+    $image_key_id = validate_id($image_key_id, 'key_') ? $image_key_id : '';
+    $opening_paragraphs = normalize_story_opening_paragraphs($story_opening);
 
     // Try AI generation if requested and key available
     if ($use_ai) {
@@ -84,7 +92,7 @@ function handle_new_story(): void
             try {
                 $key_record = api_key_prepare_for_use($key_record);
                 sw_close_session();
-                $prompt_bundle = build_opening_prompt_bundle($title, $scenario, $user);
+                $prompt_bundle = build_opening_prompt_bundle($title, $scenario, $user, $story_opening);
 
                 $provider = play_ai_provider($key_record, $user);
                 $raw_response = $provider->generateText($prompt_bundle['system_prompt'], $prompt_bundle['story_context']);
@@ -105,21 +113,31 @@ function handle_new_story(): void
                     if (empty($paragraphs)) {
                         $paragraphs = ['The story begins…'];
                     }
+                    if (!empty($opening_paragraphs)) {
+                        $paragraphs = array_merge($opening_paragraphs, $paragraphs);
+                    }
 
                     $result = story_create(h($title), $author_id, $paragraphs, [
-                        'ai_model'            => $key_record['model_text'] ?? '',
-                        'ai_provider'         => $key_record['provider'] ?? '',
-                        'ai_key_label'        => $key_record['label'] ?? '',
-                        'scenario_essentials' => $prompt_bundle['scenario_essentials'],
+                        'ai_model'             => $key_record['model_text'] ?? '',
+                        'ai_provider'          => $key_record['provider'] ?? '',
+                        'ai_key_label'         => $key_record['label'] ?? '',
+                        'scenario_essentials'  => $prompt_bundle['scenario_essentials'],
+                        'visibility'           => $story_visibility,
+                        'shared_user_ids'      => [],
+                        'auto_generate_images' => $auto_generate_images,
+                        'auto_image_key_id'    => $auto_generate_images ? $image_key_id : '',
                     ]);
 
                     // Update with AI choices
                     if (!empty($parsed['choices'])) {
                         node_update_choices($result['story_id'], $result['node_id'], $parsed['choices']);
                     }
+                    $redirect_url = $auto_generate_images
+                        ? app_url('node', ['story' => $result['story_id'], 'id' => $result['node_id'], 'auto_image' => '1'])
+                        : node_url($result['story_id'], $result['node_id']);
 
                     flash('success', 'Story created with AI! Review and edit as you wish.');
-                    redirect(node_url($result['story_id'], $result['node_id']));
+                    redirect($redirect_url);
                 }
             } catch (RuntimeException $e) {
                 // AI failed — fall through to manual creation
@@ -132,8 +150,12 @@ function handle_new_story(): void
     }
 
     // Manual fallback: create blank story
-    $result = story_create(h($title), $author_id, [], [
-        'scenario_essentials' => $scenario,
+    $result = story_create(h($title), $author_id, $opening_paragraphs, [
+        'scenario_essentials'  => $scenario,
+        'visibility'           => $story_visibility,
+        'shared_user_ids'      => [],
+        'auto_generate_images' => $auto_generate_images,
+        'auto_image_key_id'    => $auto_generate_images ? $image_key_id : '',
     ]);
 
     // Guests can't edit, so redirect to node view; logged-in users go to editor
@@ -252,9 +274,12 @@ function handle_continue_choice(): void
                 ]);
 
                 node_link_choice($story_id, $parent_node_id, $chosen, $child_node_id);
+                $redirect_url = story_auto_images_enabled($story_id)
+                    ? app_url('node', ['story' => $story_id, 'id' => $child_node_id, 'auto_image' => '1'])
+                    : node_url($story_id, $child_node_id);
 
                 flash('success', 'The story continues! Edit if you like.');
-                redirect(node_url($story_id, $child_node_id));
+                redirect($redirect_url);
             }
         } catch (RuntimeException $e) {
             // AI failed — fall through to manual

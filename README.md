@@ -9,9 +9,12 @@ The repository root intentionally stays minimal: the deployable app is the `stor
 ## Features
 
 - **Branching stories** — Each page offers choices that lead to new pages, forming a tree of narrative paths
+- **Private stories** — Logged-in creators can make stories private and share read/play access with selected users; admins retain access
 - **AI-powered generation** — Generate story content using OpenAI, Anthropic, Gemini, Ollama, or any OpenAI-compatible API
+- **Story Opening** — Provide optional opening text that becomes the first part of the root page before AI-generated text is appended
+- **Story settings row** — Root pages group Title, Guidelines, Access, Theme, and Delete controls together at the bottom of the story
 - **Real-time streaming** — Watch AI-generated text appear token by token via Server-Sent Events, with abort controls if a request stalls
-- **Image generation** — Create illustrations for story pages using DALL-E, GPT Image, Flux, or compatible image models
+- **Image generation** — Create illustrations for story pages using DALL-E, GPT Image, Flux, or compatible image models; stories can opt into automatic pictures after AI text generation
 - **Image management** — Regenerate images with side-by-side comparison, delete unwanted images
 - **Multiple API keys** — Configure multiple AI providers with user-scoped or shared access
 - **Per-user AI tuning** — Logged-in users can edit their story system prompt text and generation controls, while admins manage the shared JSON schema
@@ -195,6 +198,17 @@ Each story page is a complete, valid HTML document containing:
 - `data-choices-json` attribute for branch links
 - `.sw-para` paragraphs for the narrative content
 
+
+### Story Privacy
+
+Logged-in story creators can set a story to **Private** from the Begin New Story modal or from the root story page. Private stories are hidden from public story lists and cannot be read or continued by guests or unrelated users. The owner can grant access by exact username; shared users can read and play/continue the private story. Admin users always retain access.
+
+Story pages and generated/uploaded story images are served through PHP controllers so privacy checks apply before content is returned. Apache `.htaccess` must be active to block direct access to raw `stories/` and `_assets/images/` files.
+
+Auto-image generation is stored as a story-level preference. When enabled and an accessible image model exists, StoryWeaver redirects to the completed page first, then starts the normal image-generation button flow so the standard progress UI is used.
+
+The root story page's **Story Settings** row groups story-wide controls. Owners/admins can manage Access and delete the entire story; editors/admins can rename story titles; story creators/admins can set per-story themes. Delete Story removes all live/quarantined story pages and generated images.
+
 ### AI Integration
 
 The `AIProvider` class normalizes requests across providers:
@@ -209,9 +223,10 @@ The `AIProvider` class normalizes requests across providers:
 - **CSRF protection** on all forms and AJAX requests
 - **Path traversal prevention** via `validate_id()` enforcing strict `{prefix}_{8 hex chars}` format
 - **HTML sanitization** strips all tags except `<b><i><em><strong><a><br><u>`
+- **Story access checks** gate private story reads, continuation/play actions, prompt preview context, and image delivery
 - **API keys** are never exposed in client-side responses
 - **Password hashing** uses `password_hash()` with `PASSWORD_BCRYPT`
-- **Defense-in-depth** `.htaccess` files protect `_data/`, `_lib/`, `_mail/`, and `quarantine/` from direct HTTP access
+- **Defense-in-depth** `.htaccess` files protect `_data/`, `_lib/`, `_mail/`, `stories/`, generated story images, and `quarantine/` from direct HTTP access
 - **Deployment-focused packaging** keeps runtime data, generated stories, quarantine content, and generated images out of version control
 - **Session fixation protection** via `session_regenerate_id()` on login
 

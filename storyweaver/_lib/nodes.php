@@ -118,6 +118,107 @@ function story_get_title(string $story_id): string
 }
 
 /**
+ * Permanently delete a full story, including quarantined pages and generated images.
+ */
+function story_delete(string $story_id): bool
+{
+    if (!validate_id($story_id, 'story_')) {
+        return false;
+    }
+
+    $story_dirs = [
+        STORIES_DIR . '/' . $story_id,
+        QUARANTINE_DIR . '/' . $story_id,
+    ];
+    $node_ids = [];
+
+    foreach ($story_dirs as $story_dir) {
+        foreach (glob($story_dir . '/node_*.html') ?: [] as $node_path) {
+            $node_id = basename($node_path, '.html');
+            if (validate_id($node_id, 'node_')) {
+                $node_ids[$node_id] = true;
+            }
+        }
+    }
+
+    $found_story_dir = false;
+    foreach ($story_dirs as $story_dir) {
+        if (!is_dir($story_dir)) {
+            continue;
+        }
+
+        $found_story_dir = true;
+        if (!story_delete_directory($story_dir)) {
+            return false;
+        }
+    }
+
+    if (!$found_story_dir) {
+        return false;
+    }
+
+    foreach (array_keys($node_ids) as $node_id) {
+        foreach (glob(sw_root() . '/_assets/images/' . $node_id . '-*') ?: [] as $image_path) {
+            @unlink($image_path);
+        }
+    }
+
+    return true;
+}
+
+/**
+ * Recursively remove a story-owned directory after validating its location.
+ */
+function story_delete_directory(string $dir): bool
+{
+    $real_dir = realpath($dir);
+    $allowed_roots = array_filter([
+        realpath(STORIES_DIR),
+        realpath(QUARANTINE_DIR),
+    ]);
+
+    if ($real_dir === false || !is_dir($real_dir)) {
+        return false;
+    }
+
+    $inside_allowed_root = false;
+    foreach ($allowed_roots as $root) {
+        if ($real_dir !== $root && str_starts_with($real_dir, $root . DIRECTORY_SEPARATOR)) {
+            $inside_allowed_root = true;
+            break;
+        }
+    }
+    if (!$inside_allowed_root) {
+        return false;
+    }
+
+    $items = scandir($real_dir);
+    if ($items === false) {
+        return false;
+    }
+
+    foreach ($items as $item) {
+        if ($item === '.' || $item === '..') {
+            continue;
+        }
+
+        $path = $real_dir . DIRECTORY_SEPARATOR . $item;
+        if (is_dir($path) && !is_link($path)) {
+            if (!story_delete_directory($path)) {
+                return false;
+            }
+            continue;
+        }
+
+        if (!@unlink($path)) {
+            return false;
+        }
+    }
+
+    return @rmdir($real_dir);
+}
+
+/**
  * Normalize a story title for storage.
  */
 function normalize_story_title(string $title): string
@@ -290,6 +391,182 @@ function node_meta_append_history(array $meta, string $user_id, string $action, 
     return $meta;
 }
 
+
+/**
+ * Return normalized story-wide privacy metadata from the root node.
+ * Missing metadata is public for backward compatibility.
+ *
+ * @return array{visibility:string,shared_user_ids:array<int,string>,owner_user_id:string,root_node_id:string|null}
+ */
+function story_privacy_info(string $story_id): array
+{
+    $info = [
+        'visibility' => 'public',
+        'shared_user_ids' => [],
+        'owner_user_id' => '',
+        'root_node_id' => null,
+    ];
+
+    $root_id = story_find_root($story_id);
+    if ($root_id === null) {
+        return $info;
+    }
+
+    $info['root_node_id'] = $root_id;
+    $root = node_read($story_id, $root_id, true);
+    if ($root === null) {
+        return $info;
+    }
+
+    $meta = $root['sw_meta'] ?? [];
+    $visibility = (string) ($meta['visibility'] ?? 'public');
+    $info['visibility'] = $visibility === 'private' ? 'private' : 'public';
+
+    $shared = $meta['shared_user_ids'] ?? [];
+    if (is_array($shared)) {
+        $info['shared_user_ids'] = array_values(array_unique(array_filter(array_map('strval', $shared), function ($id) {
+            return validate_id($id, 'usr_');
+        })));
+    }
+
+    $created_by = (string) ($meta['created_by'] ?? '');
+    if (validate_id($created_by, 'usr_')) {
+        $info['owner_user_id'] = $created_by;
+    } elseif (validate_id((string) ($root['author_id'] ?? ''), 'usr_')) {
+        $info['owner_user_id'] = (string) $root['author_id'];
+    }
+
+    return $info;
+}
+
+/**
+ * Return true when the user can read/play any node in the story.
+ */
+function story_user_can_access(string $story_id, ?array $user): bool
+{
+    $info = story_privacy_info($story_id);
+    if ($info['visibility'] !== 'private') {
+        return true;
+    }
+
+    if ($user === null) {
+        return false;
+    }
+
+    if (($user['role'] ?? '') === 'admin') {
+        return true;
+    }
+
+    $user_id = (string) ($user['id'] ?? '');
+    if ($user_id === '') {
+        return false;
+    }
+
+    return $user_id === $info['owner_user_id'] || in_array($user_id, $info['shared_user_ids'], true);
+}
+
+/**
+ * Return true when the user can change a story's privacy/share list.
+ */
+function story_user_can_manage_access(string $story_id, ?array $user): bool
+{
+    if ($user === null) {
+        return false;
+    }
+
+    if (($user['role'] ?? '') === 'admin') {
+        return true;
+    }
+
+    $info = story_privacy_info($story_id);
+    $user_id = (string) ($user['id'] ?? '');
+    return $user_id !== '' && $user_id === $info['owner_user_id'];
+}
+
+/**
+ * Replace root story privacy metadata.
+ */
+function story_update_privacy(string $story_id, string $visibility, array $shared_user_ids, string $updated_by): bool
+{
+    $root_id = story_find_root($story_id);
+    if ($root_id === null) {
+        return false;
+    }
+
+    $root = node_read($story_id, $root_id, true);
+    if ($root === null) {
+        return false;
+    }
+
+    $clean_shared = array_values(array_unique(array_filter(array_map('strval', $shared_user_ids), function ($id) {
+        return validate_id($id, 'usr_');
+    })));
+
+    $meta = $root['sw_meta'] ?? [];
+    $meta['visibility'] = $visibility === 'private' ? 'private' : 'public';
+    $meta['shared_user_ids'] = $clean_shared;
+    $meta['privacy_updated_at'] = gmdate('Y-m-d\TH:i:s\Z');
+    $meta['privacy_updated_by'] = $updated_by;
+    $meta = node_meta_append_history($meta, $updated_by, 'story_privacy_updated');
+
+    node_update_meta($story_id, $root_id, $meta);
+    return true;
+}
+
+/**
+ * Build public user summaries for a story's share list.
+ *
+ * @return array<int, array{id:string,username:string,role:string}>
+ */
+function story_shared_users(array $shared_user_ids): array
+{
+    $users = [];
+    foreach ($shared_user_ids as $user_id) {
+        $user = user_find_by_id((string) $user_id);
+        if ($user === null) {
+            continue;
+        }
+        $users[] = [
+            'id' => (string) ($user['id'] ?? ''),
+            'username' => (string) ($user['username'] ?? ''),
+            'role' => (string) ($user['role'] ?? ''),
+        ];
+    }
+    return $users;
+}
+
+/**
+ * Return the root node sw-meta for story-wide settings.
+ */
+function story_root_meta(string $story_id): array
+{
+    $root_id = story_find_root($story_id);
+    if ($root_id === null) {
+        return [];
+    }
+    $root = node_read($story_id, $root_id, true);
+    return is_array($root['sw_meta'] ?? null) ? $root['sw_meta'] : [];
+}
+
+/**
+ * Return true when story pages should auto-generate images after AI text.
+ */
+function story_auto_images_enabled(string $story_id): bool
+{
+    $meta = story_root_meta($story_id);
+    return !empty($meta['auto_generate_images']);
+}
+
+/**
+ * Return the preferred image key ID for story auto-image generation.
+ */
+function story_auto_image_key_id(string $story_id): string
+{
+    $meta = story_root_meta($story_id);
+    $key_id = (string) ($meta['auto_image_key_id'] ?? '');
+    return validate_id($key_id, 'key_') ? $key_id : '';
+}
+
 /* ------------------------------------------------------------------
  * Node CRUD
  * ----------------------------------------------------------------*/
@@ -420,6 +697,10 @@ function node_user_can_access_quarantine(string $story_id, array $node, ?array $
  */
 function node_read_for_user(string $story_id, string $node_id, ?array $user): ?array
 {
+    if (!story_user_can_access($story_id, $user)) {
+        return null;
+    }
+
     $node = node_read($story_id, $node_id, false);
     if ($node !== null) {
         return $node;
@@ -1173,6 +1454,20 @@ function node_generate_html(array $params): string
         ];
         if (!empty($params['scenario_essentials'])) {
             $meta_log['scenario_essentials'] = (string) $params['scenario_essentials'];
+        }
+        if (array_key_exists('visibility', $params)) {
+            $meta_log['visibility'] = ((string) $params['visibility']) === 'private' ? 'private' : 'public';
+        }
+        if (array_key_exists('shared_user_ids', $params) && is_array($params['shared_user_ids'])) {
+            $meta_log['shared_user_ids'] = array_values(array_unique(array_filter(array_map('strval', $params['shared_user_ids']), function ($id) {
+                return validate_id($id, 'usr_');
+            })));
+        }
+        if (array_key_exists('auto_generate_images', $params)) {
+            $meta_log['auto_generate_images'] = !empty($params['auto_generate_images']);
+        }
+        if (!empty($params['auto_image_key_id']) && validate_id((string) $params['auto_image_key_id'], 'key_')) {
+            $meta_log['auto_image_key_id'] = (string) $params['auto_image_key_id'];
         }
         if ($ai_model !== '') {
             $meta_log['ai_generated'] = true;

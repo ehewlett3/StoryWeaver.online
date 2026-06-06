@@ -15,6 +15,7 @@ require_once __DIR__ . '/AIProvider.php';
 /** Maximum total characters for the assembled context string. */
 define('MAX_CONTEXT_CHARS', 12000);
 define('SCENARIO_ESSENTIALS_MAX_CHARS', 4000);
+define('STORY_OPENING_MAX_CHARS', 6000);
 define('PROMPT_CHARS_PER_TOKEN', 4);
 define('DEFAULT_MODEL_CONTEXT_TOKENS', 32000);
 define('DEFAULT_CONTEXT_OUTPUT_RESERVE_TOKENS', 2048);
@@ -32,7 +33,7 @@ function get_system_prompt(?array $user = null): string
 }
 
 /**
- * Read the story-wide scenario essentials from the root node metadata.
+ * Read the story-wide story guidelines from the root node metadata.
  */
 function story_get_scenario_essentials(string $story_id): string
 {
@@ -50,11 +51,41 @@ function story_get_scenario_essentials(string $story_id): string
 }
 
 /**
- * Normalize Scenario Essentials text to a safe maximum length.
+ * Normalize Story Guidelines text to a safe maximum length.
  */
 function normalize_scenario_essentials(string $scenario_essentials): string
 {
     return trim(mb_substr($scenario_essentials, 0, SCENARIO_ESSENTIALS_MAX_CHARS));
+}
+
+/**
+ * Convert optional user-provided opening text into sanitized root-node paragraphs.
+ *
+ * Kept as plain text input: blank lines split paragraphs, single line breaks
+ * remain line breaks inside the paragraph.
+ *
+ * @return array<int, string>
+ */
+function normalize_story_opening_paragraphs(string $story_opening): array
+{
+    $story_opening = trim(mb_substr($story_opening, 0, STORY_OPENING_MAX_CHARS));
+    if ($story_opening === '') {
+        return [];
+    }
+
+    $story_opening = str_replace(["\r\n", "\r"], "\n", $story_opening);
+    $blocks = preg_split("/\n\s*\n/u", $story_opening) ?: [];
+    $paragraphs = [];
+
+    foreach ($blocks as $block) {
+        $block = trim($block);
+        if ($block === '') {
+            continue;
+        }
+        $paragraphs[] = sanitize_paragraph_html(nl2br(h($block), false));
+    }
+
+    return array_values(array_filter($paragraphs, static fn ($p) => trim((string) $p) !== ''));
 }
 
 /**
@@ -425,7 +456,7 @@ function truncate_context(array $entries, int $max_chars = MAX_CONTEXT_CHARS): a
  *
  * @param array  $entries     Context entries (oldest to newest).
  * @param string $choice_text The choice the player just made.
- * @param string $scenario_essentials Optional scenario essentials carried forward from the root node.
+ * @param string $scenario_essentials Optional story guidelines carried forward from the root node.
  * @return string The assembled user message.
  */
 function build_story_prompt(
@@ -574,12 +605,12 @@ function compress_story_history_for_prompt(
  *
  * @return array{scenario_essentials: string, system_prompt: string, story_context: string}
  */
-function build_opening_prompt_bundle(string $title, string $scenario_essentials = '', ?array $user = null): array
+function build_opening_prompt_bundle(string $title, string $scenario_essentials = '', ?array $user = null, string $story_opening = ''): array
 {
     return [
         'scenario_essentials' => $scenario_essentials,
         'system_prompt'       => get_system_prompt($user),
-        'story_context'       => build_opening_prompt($title, $scenario_essentials),
+        'story_context'       => build_opening_prompt($title, $scenario_essentials, $story_opening),
     ];
 }
 
@@ -676,12 +707,18 @@ function build_pending_choices_prompt_bundle(
  * @param string $scenario_essentials Optional scenario description.
  * @return string The user message for the opening node.
  */
-function build_opening_prompt(string $title, string $scenario_essentials = ''): string
+function build_opening_prompt(string $title, string $scenario_essentials = '', string $story_opening = ''): string
 {
     $prompt = "Begin a new choose-your-own-adventure story titled \"" . $title . "\".";
 
     if ($scenario_essentials !== '') {
-        $prompt .= "\n\nScenario details: " . $scenario_essentials;
+        $prompt .= "\n\nStory guidelines: " . $scenario_essentials;
+    }
+
+    $story_opening = trim($story_opening);
+    if ($story_opening !== '') {
+        $prompt .= "\n\nThe user has already written this exact opening text for the first page. Continue naturally after it without repeating it:\n"
+            . $story_opening;
     }
 
     $prompt .= "\n\nWrite the opening scene. Set the atmosphere, introduce the protagonist's situation, and present the first set of choices.";

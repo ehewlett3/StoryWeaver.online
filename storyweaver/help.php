@@ -47,11 +47,11 @@ $base = base_url();
             </a>
             <a class="sw-help-card" href="#story-flow">
                 <h2>📚 Story flow</h2>
-                <p>Understand roots, pages, choices, continuations, and custom actions.</p>
+                <p>Understand roots, pages, choices, privacy, continuations, and custom actions.</p>
             </a>
             <a class="sw-help-card" href="#ai-tools">
                 <h2>✨ AI tools</h2>
-                <p>Learn prompt preview, Scenario Essentials, regeneration, and images.</p>
+                <p>Learn prompt preview, Story Guidelines, regeneration, and images.</p>
             </a>
             <a class="sw-help-card" href="#settings-keys">
                 <h2>🔑 Settings & keys</h2>
@@ -75,7 +75,7 @@ $base = base_url();
             <h2>🚀 Getting started</h2>
             <p><strong>Guests</strong> can read stories, follow branches, and use shared AI keys. Logged-in contributors can also edit their own pages and manage their own API keys.</p>
             <p>Use <strong>📚 Stories</strong> to return to the main list. Use <strong>❓ Help</strong> any time you need a refresher on features or roles.</p>
-            <p>To begin, click <strong>Begin New Story</strong>. You can start manually, let AI generate the opening, or start with AI and then branch into manual or custom-action play whenever you like.</p>
+            <p>To begin, click <strong>Begin New Story</strong>. You can start manually, provide an optional <strong>Story Opening</strong>, add optional <strong>Story Guidelines</strong>, choose separate text and image AI models, mark a logged-in story private, and opt into automatic pictures when image generation is available.</p>
             <p>On the story list, use the sort controls beside <strong>Stories</strong> to reorder cards by creation date, update date, title, author, or page count, with ascending or descending order.</p>
             <p>Admins can also post a rich-text homepage <strong>News and Announcements</strong> panel above the story list for site news, events, or maintenance notes. It starts expanded, then collapses automatically on later visits during the same browser session.</p>
         </section>
@@ -88,7 +88,9 @@ $base = base_url();
                 <li><strong>Pending choices</strong> do not have a child page yet, so following them creates the next page.</li>
                 <li><strong>Custom actions</strong> let you type your own next move in an AI-dungeon-style flow instead of choosing one of the listed options.</li>
                 <li><strong>Edit</strong> opens the rich-text editor for pages you are allowed to change.</li>
-                <li><strong>Story Title</strong> on a root page lets editors and admins rename the whole story.</li>
+                <li><strong>Story Settings</strong> on a root page keeps Title, Guidelines, Access, Theme, and Delete controls together at the bottom of the page.</li>
+                <li><strong>Access</strong> lets the story owner or an admin make a story private and share read/play access with exact usernames. Admins always retain access.</li>
+                <li><strong>Delete</strong> lets the story owner or an admin permanently delete the whole story, including all pages and generated images.</li>
                 <li><strong>Latest Page</strong> lets admins jump straight to the newest page in a story from the story list or while viewing that story.</li>
                 <li><strong>Mixed play</strong> means one story can freely combine tap-to-choose branches, typed actions, AI continuation, and hand-written scenes.</li>
             </ul>
@@ -96,12 +98,13 @@ $base = base_url();
 
         <section id="ai-tools" class="sw-help-section">
             <h2>✨ AI tools</h2>
-            <p><strong>Scenario Essentials</strong> are story-wide notes stored on the first page. They are carried forward into future AI continuation prompts so tone, premise, and constraints remain consistent.</p>
+            <p><strong>Story Opening</strong> is optional user-written text that becomes the first part of the root page. <strong>Story Guidelines</strong> are story-wide notes stored on the first page and carried forward into future AI continuation prompts so tone, premise, and constraints remain consistent.</p>
             <ul class="sw-help-list">
                 <li><strong>Generate with AI</strong> creates the next page and three choices when a text model is available.</li>
                 <li><strong>Preview Prompts</strong> shows the exact system prompt, story context, and image prompt that would be sent.</li>
                 <li><strong>Regenerate Story</strong> creates a candidate replacement for the current page and its unlinked choices, then lets you compare the old and new versions before deciding.</li>
                 <li><strong>Generate Image</strong> and <strong>Regenerate Image</strong> create illustrations for the current page. Image regeneration lets you compare versions side by side.</li>
+                <li><strong>Auto Pictures</strong> starts the normal image-generation flow after AI text and choices finish and the new page has loaded.</li>
                 <li><strong>Abort</strong> appears on long-running generation overlays so you can cancel if a provider stalls instead of waiting for the full timeout.</li>
                 <li><strong>Regeneration guidance</strong> lets you add optional steering text when regenerating story text or images.</li>
             </ul>
@@ -146,7 +149,7 @@ $base = base_url();
                 <li><strong>Guest / Viewer</strong> — read and continue stories using shared AI keys.</li>
                 <li><strong>Contributor</strong> — edit your own pages and manage your own API keys.</li>
                 <li><strong>Editor</strong> — edit any page, rename stories, review concerns, and manage quarantine.</li>
-                <li><strong>Admin</strong> — manage users, site themes, all keys, prompt preview, the shared JSON schema, and story renaming.</li>
+                <li><strong>Admin</strong> — manage users, site themes, all keys, prompt preview, the shared JSON schema, story access, story deletion, and story renaming.</li>
             </ul>
         </section>
 
@@ -164,8 +167,8 @@ $base = base_url();
                     </ol>
                     <code class="sw-help-code">git clone https://github.com/ehewlett3/StoryWeaver.online.git
 cd StoryWeaver.online
-php -S localhost:8080</code>
-                    <p>For Apache deployments, enable rewrite support and <code>AllowOverride All</code>. The built-in PHP server is convenient for local development, but it does not honor the private-directory <code>.htaccess</code> protections used in production.</p>
+# serve the storyweaver/ directory with Apache/XAMPP, not php -S</code>
+                    <p>Enable Apache rewrite support and <code>AllowOverride All</code>. PHP's built-in server is not recommended because it does not honor the private-directory <code>.htaccess</code> protections or extensionless routing used in production.</p>
                 </div>
             </details>
         </section>
