@@ -1120,6 +1120,9 @@ textarea.sw-theme-editor {
 }
 
 .sw-announcement-panel summary {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
     cursor: pointer;
     list-style: none;
 }
@@ -1137,6 +1140,10 @@ textarea.sw-theme-editor {
 
 .sw-announcement-panel[open] .sw-announcement-panel-title {
     margin-bottom: 1rem;
+}
+
+.sw-announcement-past-btn {
+    margin-left: auto;
 }
 
 .sw-announcement-panel-body {
@@ -1160,6 +1167,21 @@ textarea.sw-theme-editor {
     font-weight: 600;
     color: var(--sw-color-primary);
     margin-top: 1rem;
+}
+
+.sw-announcement-editor-heading {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.35rem;
+}
+
+.sw-announcement-editor-heading label {
+    margin-bottom: 0;
+}
+
+.sw-announcement-editor-heading .sw-btn {
+    margin-left: auto;
 }
 
 .sw-story-item {

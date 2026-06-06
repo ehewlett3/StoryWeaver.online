@@ -36,13 +36,14 @@ if ($node === null) {
 }
 
 // Determine permissions
+$is_announcements_archive = story_is_announcements_archive($story_id);
+$can_continue_story = story_user_can_continue_story($story_id, $user);
 $can_edit = false;
 $can_flag = true;
 if ($user) {
-    $is_author = ($node['author_id'] === $user['id']);
-    $is_editor = (role_level($user['role']) >= role_level('editor'));
-    $can_edit = $is_author || $is_editor;
+    $can_edit = story_user_can_edit_node($story_id, $node, $user);
 }
+$can_flag = !$is_announcements_archive;
 $can_jump_latest = $user !== null && (($user['role'] ?? '') === 'admin');
 $latest_node_id = $can_jump_latest ? story_find_latest_node($story_id, true) : null;
 
@@ -102,7 +103,8 @@ $effective_theme = $story_theme !== '' ? $story_theme : theme_css();
 $editable_story_title = html_entity_decode((string) ($node['title'] ?? ''), ENT_QUOTES | ENT_HTML5, 'UTF-8');
 $can_rename_story = $user !== null
     && $is_root_node
-    && role_level((string) ($user['role'] ?? 'viewer')) >= role_level('editor');
+    && role_level((string) ($user['role'] ?? 'viewer')) >= role_level('editor')
+    && (!$is_announcements_archive || ($user['role'] ?? '') === 'admin');
 
 $linked_choices = [];
 $display_pending_choices = [];
@@ -122,7 +124,7 @@ $back_action_url = $node['parent_id'] !== ''
     ? node_url($story_id, $node['parent_id'])
     : app_url('index');
 $back_action_label = $node['parent_id'] !== '' ? 'Back' : 'All stories';
-$show_image_actions = $has_image_model || ($user && $can_edit);
+$show_image_actions = $can_continue_story && ($has_image_model || ($user && $can_edit));
 $can_manage_ai_choices = $user && $can_edit && $ai_available && node_can_regenerate($node);
 $can_delete_final_page = $user && $can_edit && node_can_regenerate($node);
 $show_manage_end_actions = $can_edit || $can_delete_final_page || $can_regenerate_story;
@@ -367,7 +369,7 @@ $story_shared_users = story_shared_users($story_privacy['shared_user_ids'] ?? []
                 </ul>
             <?php endif; ?>
 
-            <?php if (!empty($display_pending_choices)): ?>
+            <?php if ($can_continue_story && !empty($display_pending_choices)): ?>
                 <?php if ($collapse_pending_choices): ?>
                     <details class="sw-choice-accordion">
                         <summary>More choices</summary>
@@ -399,6 +401,7 @@ $story_shared_users = story_shared_users($story_privacy['shared_user_ids'] ?? []
             <?php endif; ?>
 
             <!-- Custom choice form -->
+            <?php if ($can_continue_story): ?>
             <form class="sw-custom-choice" action="<?= h(app_url('play')) ?>" method="POST">
                 <input type="hidden" name="story_id" value="<?= h($story_id) ?>">
                 <input type="hidden" name="parent_node_id" value="<?= h($node_id) ?>">
@@ -409,8 +412,9 @@ $story_shared_users = story_shared_users($story_privacy['shared_user_ids'] ?? []
                        placeholder="Or type your own action…">
                 <button type="submit" class="sw-btn sw-btn-primary">Continue →</button>
             </form>
+            <?php endif; ?>
 
-            <?php if ($ai_available || $has_image_model || ($user && $user['role'] === 'admin')): ?>
+            <?php if ($can_continue_story && ($ai_available || $has_image_model || ($user && $user['role'] === 'admin'))): ?>
                 <div class="sw-choice-ai-row">
                     <div class="sw-ai-indicator">
                         <?php if ($ai_available): ?>
@@ -450,7 +454,7 @@ $story_shared_users = story_shared_users($story_privacy['shared_user_ids'] ?? []
                 </div>
             <?php endif; ?>
 
-            <?php if ($ai_available && empty($node['choices']) && !empty($node['paragraphs'])): ?>
+            <?php if ($can_continue_story && $ai_available && empty($node['choices']) && !empty($node['paragraphs'])): ?>
                 <!-- AI continuation for manually-started nodes -->
                 <button type="button" id="sw-ai-continue-btn" class="sw-btn sw-btn-secondary sw-btn-ai"
                         data-ai-text-control="continue"

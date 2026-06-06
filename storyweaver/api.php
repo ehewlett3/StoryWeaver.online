@@ -203,11 +203,7 @@ function handle_save_node_text(): void
         json_error('Node not found.', 404);
     }
 
-    // Permission check: author can edit own, editor+ can edit any
-    $is_author = ($node['author_id'] === $user['id']);
-    $is_editor = (role_level($user['role']) >= role_level('editor'));
-
-    if (!$is_author && !$is_editor) {
+    if (!story_user_can_edit_node($story_id, $node, $user)) {
         json_error('You do not have permission to edit this node.', 403);
     }
 
@@ -281,9 +277,7 @@ function handle_update_pending_choice(): void
         json_error('Node not found.', 404);
     }
 
-    $can_edit = ($node['author_id'] ?? '') === $user['id']
-        || role_level($user['role']) >= role_level('editor');
-    if (!$can_edit) {
+    if (!story_user_can_edit_node($story_id, $node, $user)) {
         json_error('You do not have permission to edit this page.', 403);
     }
 
@@ -327,9 +321,7 @@ function handle_delete_pending_choice(): void
         json_error('Node not found.', 404);
     }
 
-    $can_edit = ($node['author_id'] ?? '') === $user['id']
-        || role_level($user['role']) >= role_level('editor');
-    if (!$can_edit) {
+    if (!story_user_can_edit_node($story_id, $node, $user)) {
         json_error('You do not have permission to edit this page.', 403);
     }
 
@@ -415,6 +407,9 @@ function handle_generate_node(): void
         $parent = node_read_for_user($story_id, $parent_node_id, $user);
         if ($parent === null) {
             json_error('Parent page not found.', 404);
+        }
+        if (!story_user_can_continue_story($story_id, $user)) {
+            json_error('Only admins can continue the announcements archive.', 403);
         }
         $check_quarantine = (($parent['location'] ?? 'stories') === 'quarantine');
     } else {
@@ -614,9 +609,7 @@ function handle_regenerate_node(): void
         json_error('Story node not found.', 404);
     }
 
-    $can_edit = ($node['author_id'] ?? '') === $user['id']
-        || role_level($user['role']) >= role_level('editor');
-    if (!$can_edit) {
+    if (!story_user_can_edit_node($story_id, $node, $user)) {
         json_error('You do not have permission to regenerate this page.', 403);
     }
 
@@ -794,9 +787,7 @@ function handle_regenerate_pending_choices(): void
         json_error('Story node not found.', 404);
     }
 
-    $can_edit = ($node['author_id'] ?? '') === $user['id']
-        || role_level($user['role']) >= role_level('editor');
-    if (!$can_edit) {
+    if (!story_user_can_edit_node($story_id, $node, $user)) {
         json_error('You do not have permission to edit this page.', 403);
     }
 
@@ -1021,9 +1012,7 @@ function handle_stream_regenerate_node(): void
         exit;
     }
 
-    $can_edit = ($node['author_id'] ?? '') === $user['id']
-        || role_level($user['role']) >= role_level('editor');
-    if (!$can_edit) {
+    if (!story_user_can_edit_node($story_id, $node, $user)) {
         sse_event('error', ['error' => 'You do not have permission to regenerate this page.']);
         exit;
     }
@@ -1233,9 +1222,7 @@ function handle_apply_regenerated_node(): void
         json_error('Story node not found.', 404);
     }
 
-    $can_edit = ($node['author_id'] ?? '') === $user['id']
-        || role_level($user['role']) >= role_level('editor');
-    if (!$can_edit) {
+    if (!story_user_can_edit_node($story_id, $node, $user)) {
         json_error('You do not have permission to update this page.', 403);
     }
 
@@ -1428,6 +1415,10 @@ function handle_stream_generate_node(): void
         $parent = node_read_for_user($story_id, $parent_node_id, $user);
         if ($parent === null) {
             sse_event('error', ['error' => 'Parent page not found.']);
+            exit;
+        }
+        if (!story_user_can_continue_story($story_id, $user)) {
+            sse_event('error', ['error' => 'Only admins can continue the announcements archive.']);
             exit;
         }
         $check_quarantine = (($parent['location'] ?? 'stories') === 'quarantine');
@@ -2358,6 +2349,9 @@ function handle_generate_image(): void
     if ($node === null) {
         json_error('Page not found.', 404);
     }
+    if (!story_user_can_continue_story($story_id, $user)) {
+        json_error('Only admins can generate images for the announcements archive.', 403);
+    }
     $check_quarantine = (($node['location'] ?? 'stories') === 'quarantine');
 
     // Select API key
@@ -2596,9 +2590,7 @@ function handle_delete_final_page(): void
         json_error('Story page not found.', 404);
     }
 
-    $can_edit = ($node['author_id'] ?? '') === $user['id']
-        || role_level((string) ($user['role'] ?? 'viewer')) >= role_level('editor');
-    if (!$can_edit) {
+    if (!story_user_can_edit_node($story_id, $node, $user)) {
         json_error('You do not have permission to delete this page.', 403);
     }
 
@@ -2842,6 +2834,9 @@ function handle_rename_story(): void
     if (story_find_root($story_id) === null) {
         json_error('Story not found.', 404);
     }
+    if (story_is_announcements_archive($story_id) && ($user['role'] ?? '') !== 'admin') {
+        json_error('Only admins can rename the announcements archive.', 403);
+    }
 
     if (!story_update_title($story_id, $title, (string) ($user['id'] ?? ''))) {
         json_error('Failed to rename story.', 500);
@@ -2933,9 +2928,7 @@ function handle_update_story_scenario(): void
         json_error('Story not found.', 404);
     }
 
-    $is_author = ($root['author_id'] ?? '') === $user['id'];
-    $is_editor = role_level($user['role']) >= role_level('editor');
-    if (!$is_author && !$is_editor) {
+    if (!story_user_can_edit_node($story_id, $root, $user)) {
         json_error('You do not have permission to update Story Guidelines.', 403);
     }
 
@@ -3134,9 +3127,7 @@ function handle_delete_image(): void
         json_error('Page not found.', 404);
     }
 
-    $is_author = ($node['author_id'] ?? '') === ($user['id'] ?? '');
-    $is_editor = role_level((string) ($user['role'] ?? 'viewer')) >= role_level('editor');
-    if (!$is_author && !$is_editor) {
+    if (!story_user_can_edit_node($story_id, $node, $user)) {
         json_error('You do not have permission to delete this image.', 403);
     }
 
@@ -3178,9 +3169,7 @@ function handle_upload_image(): void
     if ($node === null) {
         json_error('Page not found.', 404);
     }
-    $is_author = ($node['author_id'] === $user['id']);
-    $is_editor = (role_level($user['role']) >= role_level('editor'));
-    if (!$is_author && !$is_editor) {
+    if (!story_user_can_edit_node($story_id, $node, $user)) {
         json_error('You can only upload images to your own pages.', 403);
     }
 

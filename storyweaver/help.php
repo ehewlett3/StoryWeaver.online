@@ -77,7 +77,7 @@ $base = base_url();
             <p>Use <strong>📚 Stories</strong> to return to the main list. Use <strong>❓ Help</strong> any time you need a refresher on features or roles.</p>
             <p>To begin, click <strong>Begin New Story</strong>. You can start manually, provide an optional <strong>Story Opening</strong>, add optional <strong>Story Guidelines</strong>, choose separate text and image AI models, mark a logged-in story private, and opt into automatic pictures when image generation is available.</p>
             <p>On the story list, use the sort controls beside <strong>Stories</strong> to reorder cards by creation date, update date, title, author, or page count, with ascending or descending order.</p>
-            <p>Admins can also post a rich-text homepage <strong>News and Announcements</strong> panel above the story list for site news, events, or maintenance notes. It starts expanded, then collapses automatically on later visits during the same browser session.</p>
+            <p>Admins can also post a rich-text homepage <strong>News and Announcements</strong> panel above the story list for site news, events, or maintenance notes. The <strong>Archive</strong> button moves the current post into <strong>Past Announcements</strong>, clears the homepage post, and keeps the archive available to visitors from the News header.</p>
         </section>
 
         <section id="story-flow" class="sw-help-section">
@@ -91,6 +91,7 @@ $base = base_url();
                 <li><strong>Story Settings</strong> on a root page keeps Title, Guidelines, Access, Theme, and Delete controls together at the bottom of the page.</li>
                 <li><strong>Access</strong> lets the story owner or an admin make a story private and share read/play access with exact usernames. Admins always retain access.</li>
                 <li><strong>Delete</strong> lets the story owner or an admin permanently delete the whole story, including all pages and generated images.</li>
+                <li><strong>Past Announcements</strong> is a public, hidden-from-list story arranged newest first. Visitors can read it; admins can edit and illustrate it like a normal story.</li>
                 <li><strong>Latest Page</strong> lets admins jump straight to the newest page in a story from the story list or while viewing that story.</li>
                 <li><strong>Mixed play</strong> means one story can freely combine tap-to-choose branches, typed actions, AI continuation, and hand-written scenes.</li>
             </ul>

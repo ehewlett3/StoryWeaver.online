@@ -211,6 +211,10 @@ function handle_continue_choice(): void
         flash('error', 'Parent page not found.');
         redirect(app_url('index'));
     }
+    if (!story_user_can_continue_story($story_id, $user)) {
+        flash('error', 'Only admins can continue the announcements archive.');
+        redirect(node_url($story_id, $parent_node_id));
+    }
     $check_q = ($parent['location'] ?? 'stories') === 'quarantine';
 
     $author_id = $user ? $user['id'] : 'anonymous';

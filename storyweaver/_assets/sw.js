@@ -3039,6 +3039,9 @@ document.addEventListener('DOMContentLoaded', function () {
     if (announcementEditor) {
 
     var announcementForm = announcementEditor.closest('form');
+    var announcementFormAction = document.getElementById('sw-announcement-form-action');
+    var announcementArchiveBtn = document.getElementById('sw-announcement-archive');
+    var announcementArchiveTitle = document.getElementById('sw-announcement-archive-title');
     var announcementSaveBtn = document.getElementById('sw-announcement-editor-save');
     var announcementCancelBtn = document.getElementById('sw-announcement-editor-cancel');
     var announcementAddParaBtn = document.getElementById('sw-announcement-add-para');
@@ -3201,6 +3204,50 @@ document.addEventListener('DOMContentLoaded', function () {
                 announcementSaveBtn.disabled = true;
             }
             setAnnouncementStatus('Saving…');
+        });
+    }
+
+    if (announcementArchiveBtn && announcementForm) {
+        announcementArchiveBtn.addEventListener('click', function () {
+            if (announcementSourceMode) {
+                announcementExitSourceMode();
+            }
+
+            var paragraphs = announcementCollectParagraphs();
+            if (paragraphs.length === 0) {
+                setAnnouncementStatus('There is no announcement to archive.', true);
+                return;
+            }
+
+            var title = prompt('Title for this archived announcement. This title will be used when linking back to it from newer announcements:');
+            if (title === null) {
+                return;
+            }
+
+            title = title.trim();
+            if (title === '') {
+                setAnnouncementStatus('An archive title is required.', true);
+                return;
+            }
+
+            if (announcementHiddenInput) {
+                announcementHiddenInput.value = JSON.stringify(paragraphs);
+            }
+            if (announcementArchiveTitle) {
+                announcementArchiveTitle.value = title;
+            }
+            if (announcementFormAction) {
+                announcementFormAction.value = 'archive_announcement';
+            }
+            announcementUnsaved = false;
+            announcementArchiveBtn.disabled = true;
+            announcementArchiveBtn.textContent = 'Archiving...';
+
+            if (typeof announcementForm.requestSubmit === 'function') {
+                announcementForm.requestSubmit();
+            } else {
+                announcementForm.submit();
+            }
         });
     }
 

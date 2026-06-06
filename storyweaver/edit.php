@@ -36,11 +36,7 @@ if ($node === null) {
     redirect(app_url('index'));
 }
 
-// Permission check: author can edit own, editor+ can edit any
-$is_author = ($node['author_id'] === $user['id']);
-$is_editor = (role_level($user['role']) >= role_level('editor'));
-
-if (!$is_author && !$is_editor) {
+if (!story_user_can_edit_node($story_id, $node, $user)) {
     flash('error', 'You do not have permission to edit this page.');
     redirect(node_url($story_id, $node_id));
 }

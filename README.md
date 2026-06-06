@@ -18,7 +18,7 @@ The repository root intentionally stays minimal: the deployable app is the `stor
 - **Image management** — Regenerate images with side-by-side comparison, delete unwanted images
 - **Multiple API keys** — Configure multiple AI providers with user-scoped or shared access
 - **Per-user AI tuning** — Logged-in users can edit their story system prompt text and generation controls, while admins manage the shared JSON schema
-- **Homepage news** — Admins can post rich-text news and announcements above the story list
+- **Homepage news** — Admins can post rich-text news above the story list and archive old posts into a public Past Announcements story
 - **In-place editing** — Rich text editor with visual and source modes for manual content creation
 - **Moderation tools** — Flag pages for concern, quarantine inappropriate content, approve/restore pages
 - **Theming** — Light and dark themes out of the box; admin can edit CSS and set per-story themes
@@ -208,6 +208,10 @@ Story pages and generated/uploaded story images are served through PHP controlle
 Auto-image generation is stored as a story-level preference. When enabled and an accessible image model exists, StoryWeaver redirects to the completed page first, then starts the normal image-generation button flow so the standard progress UI is used.
 
 The root story page's **Story Settings** row groups story-wide controls. Owners/admins can manage Access and delete the entire story; editors/admins can rename story titles; story creators/admins can set per-story themes. Delete Story removes all live/quarantined story pages and generated images.
+
+### Homepage Announcements
+
+Admins can maintain the current homepage announcement from the story index. The **Archive** button saves the current post as the newest root node in a hidden-from-index **Past Announcements** story, clears the homepage post, and links the new archive node to the immediately previous announcement. Visitors can open that archive from the **Past Announcements** button in the News and Announcements header. The archive story is public for reading, but continuation/editing controls are reserved for admins.
 
 ### AI Integration
 

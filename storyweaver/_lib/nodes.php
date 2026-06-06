@@ -118,6 +118,181 @@ function story_get_title(string $story_id): string
 }
 
 /**
+ * Find the dedicated public archive story for homepage announcements.
+ *
+ * @return array{story_id:string,root_node_id:string}|null
+ */
+function story_find_announcements_archive(): ?array
+{
+    foreach ([STORIES_DIR, QUARANTINE_DIR] as $base_dir) {
+        foreach (glob($base_dir . '/story_*') ?: [] as $story_dir) {
+            if (!is_dir($story_dir)) {
+                continue;
+            }
+
+            $story_id = basename($story_dir);
+            if (!validate_id($story_id, 'story_')) {
+                continue;
+            }
+
+            $root_id = story_find_root($story_id);
+            if ($root_id === null) {
+                continue;
+            }
+
+            $root = node_read($story_id, $root_id, true);
+            if ($root !== null && story_node_is_announcements_archive($root)) {
+                return [
+                    'story_id' => $story_id,
+                    'root_node_id' => $root_id,
+                ];
+            }
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Return whether a parsed root node belongs to the announcements archive.
+ */
+function story_node_is_announcements_archive(array $node): bool
+{
+    $meta = is_array($node['sw_meta'] ?? null) ? $node['sw_meta'] : [];
+    return (string) ($meta['system_story'] ?? '') === 'announcements';
+}
+
+/**
+ * Return whether the story is the dedicated announcements archive.
+ */
+function story_is_announcements_archive(string $story_id): bool
+{
+    $root_id = story_find_root($story_id);
+    if ($root_id === null) {
+        return false;
+    }
+
+    $root = node_read($story_id, $root_id, true);
+    return $root !== null && story_node_is_announcements_archive($root);
+}
+
+/**
+ * Story-node edit permission, including system-story overrides.
+ */
+function story_user_can_edit_node(string $story_id, array $node, ?array $user): bool
+{
+    if ($user === null) {
+        return false;
+    }
+
+    if (story_is_announcements_archive($story_id)) {
+        return ($user['role'] ?? '') === 'admin';
+    }
+
+    return ($node['author_id'] ?? '') === ($user['id'] ?? '')
+        || role_level((string) ($user['role'] ?? 'viewer')) >= role_level('editor');
+}
+
+/**
+ * Return whether this user may create or generate child nodes in a story.
+ */
+function story_user_can_continue_story(string $story_id, ?array $user): bool
+{
+    if (story_is_announcements_archive($story_id)) {
+        return $user !== null && ($user['role'] ?? '') === 'admin';
+    }
+
+    return true;
+}
+
+/**
+ * Archive the current homepage announcement as the newest node in the announcements story.
+ *
+ * @param array<int, string> $paragraphs Sanitized rich-text fragments.
+ * @return array{story_id:string,node_id:string,created:bool}
+ */
+function story_archive_announcement(array $paragraphs, string $announcement_title, string $admin_user_id): array
+{
+    $announcement_title = normalize_story_title($announcement_title);
+    if ($announcement_title === '') {
+        $announcement_title = 'Announcement ' . date('M j, Y');
+    }
+
+    $paragraphs = array_values(array_filter($paragraphs, static function ($paragraph): bool {
+        return is_string($paragraph) && trim($paragraph) !== '';
+    }));
+
+    $archive_paragraphs = array_merge([
+        '<strong>' . h($announcement_title) . '</strong>',
+    ], $paragraphs);
+
+    $archive = story_find_announcements_archive();
+    $meta = [
+        'created_by' => $admin_user_id,
+        'created_at' => gmdate('Y-m-d\TH:i:s\Z'),
+        'visibility' => 'public',
+        'system_story' => 'announcements',
+        'hidden_from_index' => true,
+        'announcement_title' => $announcement_title,
+        'history' => [
+            [
+                'action' => 'announcement_archived',
+                'by' => $admin_user_id,
+                'at' => gmdate('Y-m-d\TH:i:s\Z'),
+            ],
+        ],
+    ];
+
+    if ($archive === null) {
+        $result = story_create('Past Announcements', $admin_user_id, $archive_paragraphs, [
+            'sw_meta' => $meta,
+            'visibility' => 'public',
+            'shared_user_ids' => [],
+        ]);
+        return [
+            'story_id' => $result['story_id'],
+            'node_id' => $result['node_id'],
+            'created' => true,
+        ];
+    }
+
+    $story_id = $archive['story_id'];
+    $previous_root_id = $archive['root_node_id'];
+    $previous_root = node_read($story_id, $previous_root_id, true);
+    $previous_title = 'Previous announcement';
+    if ($previous_root !== null) {
+        $previous_meta = is_array($previous_root['sw_meta'] ?? null) ? $previous_root['sw_meta'] : [];
+        $previous_title = normalize_story_title((string) ($previous_meta['announcement_title'] ?? '')) ?: $previous_title;
+    }
+
+    $new_root_id = node_create($story_id, [
+        'parent_id' => '',
+        'choice_taken' => '',
+        'author_id' => $admin_user_id,
+        'title' => 'Past Announcements',
+        'paragraphs' => $archive_paragraphs,
+        'choices' => [
+            [
+                'id' => 1,
+                'text' => $previous_title,
+                'node' => $previous_root_id . '.html',
+            ],
+        ],
+        'sw_meta' => $meta,
+    ]);
+
+    if ($previous_root !== null) {
+        node_update_relationship($story_id, $previous_root_id, $new_root_id, $previous_title);
+    }
+
+    return [
+        'story_id' => $story_id,
+        'node_id' => $new_root_id,
+        'created' => false,
+    ];
+}
+
+/**
  * Permanently delete a full story, including quarantined pages and generated images.
  */
 function story_delete(string $story_id): bool
@@ -1095,6 +1270,36 @@ function node_update_choices(string $story_id, string $node_id, array $choices):
 }
 
 /**
+ * Update a node's parent/choice relationship while preserving content and metadata.
+ */
+function node_update_relationship(string $story_id, string $node_id, string $parent_id, string $choice_taken): bool
+{
+    $node = node_read($story_id, $node_id, true);
+    if ($node === null) {
+        return false;
+    }
+
+    $html = node_generate_html([
+        'story_id'     => $node['story_id'],
+        'node_id'      => $node['node_id'],
+        'parent_id'    => $parent_id,
+        'choice_taken' => $choice_taken,
+        'author_id'    => $node['author_id'],
+        'title'        => $node['title'],
+        'paragraphs'   => $node['paragraphs'],
+        'choices'      => $node['choices'],
+        'created_at'   => $node['created_at'],
+        'flagged'      => $node['flagged'],
+        'sw_meta'      => $node['sw_meta'] ?? null,
+    ]);
+
+    $path = node_resolve_path($story_id, $node_id)
+         ?? STORIES_DIR . '/' . $story_id . '/' . $node_id . '.html';
+    atomic_write($path, $html);
+    return true;
+}
+
+/**
  * Replace a node's paragraphs, choices, and metadata in one write.
  */
 function node_replace_content(string $story_id, string $node_id, array $paragraphs, array $choices, array $sw_meta): bool
@@ -1628,6 +1833,12 @@ function sanitize_paragraph_html(string $html): string
         'del' => ['style'],
         'div' => ['style'],
         'em' => ['style'],
+        'h1' => ['style'],
+        'h2' => ['style'],
+        'h3' => ['style'],
+        'h4' => ['style'],
+        'h5' => ['style'],
+        'h6' => ['style'],
         'i' => ['style'],
         'ins' => ['style'],
         'kbd' => ['style'],

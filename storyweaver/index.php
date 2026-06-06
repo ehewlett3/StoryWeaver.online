@@ -107,6 +107,36 @@ if (is_post()) {
         }
         redirect(app_url('index'));
     }
+
+    if (($_POST['form_action'] ?? '') === 'archive_announcement') {
+        try {
+            $paragraph_json = (string) ($_POST['announcement_paragraphs'] ?? '');
+            if ($paragraph_json !== '') {
+                $paragraphs = index_decode_announcement_paragraphs($paragraph_json);
+            } else {
+                $current_json = json_encode(site_announcement_paragraphs(), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+                $paragraphs = index_decode_announcement_paragraphs(is_string($current_json) ? $current_json : '[]');
+            }
+
+            if (empty($paragraphs)) {
+                flash('error', 'There is no announcement to archive.');
+                redirect(app_url('index'));
+            }
+
+            $archive_title = normalize_story_title((string) ($_POST['archive_title'] ?? ''));
+            if ($archive_title === '') {
+                flash('error', 'An archive title is required.');
+                redirect(app_url('index'));
+            }
+
+            story_archive_announcement($paragraphs, $archive_title, (string) $user['id']);
+            site_announcement_save_paragraphs([]);
+            flash('success', 'Announcement archived.');
+        } catch (LengthException $e) {
+            flash('error', $e->getMessage());
+        }
+        redirect(app_url('index'));
+    }
 }
 
 $announcement = site_announcement_text();
@@ -116,6 +146,10 @@ $announcement_editor_json = json_encode($announcement_paragraphs, JSON_UNESCAPED
 if (!is_string($announcement_editor_json)) {
     $announcement_editor_json = '[]';
 }
+$announcements_archive = story_find_announcements_archive();
+$past_announcements_url = $announcements_archive === null
+    ? ''
+    : node_url($announcements_archive['story_id'], $announcements_archive['root_node_id']);
 
 // Get available AI keys for the new story model pickers.
 $user_id_for_key = $user ? $user['id'] : null;
@@ -240,6 +274,10 @@ if (is_dir($stories_dir)) {
             continue;
         }
 
+        if (!empty($root_node['sw_meta']['hidden_from_index'])) {
+            continue;
+        }
+
         if (!story_user_can_access($story_id, $user)) {
             continue;
         }
@@ -348,11 +386,18 @@ if (is_dir($stories_dir)) {
         }
         ?>
 
-        <?php if ($announcement !== '' || $can_edit_announcement): ?>
+        <?php if ($announcement !== '' || $can_edit_announcement || $past_announcements_url !== ''): ?>
             <section class="sw-card sw-announcement-card">
                 <details id="sw-announcement-panel" class="sw-announcement-panel" open>
                     <summary>
                         <span class="sw-card-title sw-announcement-panel-title">News and Announcements</span>
+                        <?php if ($past_announcements_url !== ''): ?>
+                            <a href="<?= h($past_announcements_url) ?>"
+                               class="sw-btn sw-btn-sm sw-btn-secondary sw-announcement-past-btn"
+                               onclick="event.stopPropagation();">
+                                Past Announcements
+                            </a>
+                        <?php endif; ?>
                     </summary>
                     <div class="sw-announcement-panel-body">
                         <?php if ($announcement_html !== ''): ?>
@@ -366,10 +411,18 @@ if (is_dir($stories_dir)) {
                                 <summary><?= $announcement === '' ? 'Add announcement' : 'Edit announcement' ?></summary>
                                 <form method="POST" action="<?= h(app_url('index')) ?>" class="sw-form">
                                     <?= csrf_field() ?>
-                                    <input type="hidden" name="form_action" value="save_announcement">
+                                    <input type="hidden" id="sw-announcement-form-action" name="form_action" value="save_announcement">
                                     <input type="hidden" id="sw-announcement-paragraphs-input" name="announcement_paragraphs" value="<?= h($announcement_editor_json) ?>">
+                                    <input type="hidden" id="sw-announcement-archive-title" name="archive_title" value="">
                                     <div class="sw-form-group" style="margin-top:0.75rem;">
-                                        <label>Homepage announcement</label>
+                                        <div class="sw-announcement-editor-heading">
+                                            <label>Homepage announcement</label>
+                                            <button type="button"
+                                                    id="sw-announcement-archive"
+                                                    class="sw-btn sw-btn-secondary sw-btn-sm">
+                                                Archive
+                                            </button>
+                                        </div>
                                         <div id="sw-announcement-editor"
                                              class="sw-announcement-rich-editor"
                                              data-original-paragraphs="<?= h($announcement_editor_json) ?>">
