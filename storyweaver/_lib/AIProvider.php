@@ -124,20 +124,43 @@ class AIProvider
      */
     public function listModels(): array
     {
+        $catalog = $this->listModelCatalog();
+        return array_values(array_unique(array_merge($catalog['text'], $catalog['image'])));
+    }
+
+    /**
+     * List discoverable text and image models for the configured provider.
+     *
+     * @return array{text: array<int, string>, image: array<int, string>}
+     */
+    public function listModelCatalog(): array
+    {
         $provider = $this->key['provider'] ?? 'openai';
 
-        $models = match ($provider) {
-            'anthropic' => $this->listAnthropicModels(),
-            'gemini'    => $this->listGeminiModels(),
-            'ollama'    => $this->listOllamaModels(),
-            default     => $this->listOpenAICompatibleModels(),
+        $open_ai_compatible_models = $this->isOpenRouterHost()
+            ? []
+            : $this->listOpenAICompatibleModels();
+
+        $catalog = match ($provider) {
+            'anthropic' => ['text' => $this->listAnthropicModels(), 'image' => []],
+            'gemini'    => ['text' => $this->listGeminiModels(), 'image' => $this->listGeminiModels()],
+            'ollama'    => ['text' => $this->listOllamaModels(), 'image' => $this->listOllamaModels()],
+            default     => $this->isOpenRouterHost()
+                ? [
+                    'text' => $this->listOpenRouterModelsByOutput(['text']),
+                    'image' => $this->listOpenRouterModelsByOutput(['image']),
+                ]
+                : ['text' => $open_ai_compatible_models, 'image' => $open_ai_compatible_models],
         };
 
-        $models = array_values(array_unique(array_filter(array_map('trim', $models), function ($model) {
-            return $model !== '';
-        })));
-        sort($models, SORT_NATURAL | SORT_FLAG_CASE);
-        return $models;
+        foreach (['text', 'image'] as $kind) {
+            $catalog[$kind] = array_values(array_unique(array_filter(array_map('trim', $catalog[$kind] ?? []), function ($model) {
+                return $model !== '';
+            })));
+            sort($catalog[$kind], SORT_NATURAL | SORT_FLAG_CASE);
+        }
+
+        return $catalog;
     }
 
     /* ------------------------------------------------------------------
@@ -827,6 +850,9 @@ class AIProvider
             if ($provider === 'ollama') {
                 return $this->generateImageOllama($model, $prompt);
             }
+            if ($this->isOpenRouterHost()) {
+                return $this->generateImageOpenRouter($model, $prompt);
+            }
             return $this->generateImageOpenAI($model, $prompt, $size);
         } finally {
             $this->timeout = $saved_timeout;
@@ -935,6 +961,46 @@ class AIProvider
         throw new RuntimeException('Image generation failed: ' . $err);
     }
 
+    /**
+     * Generate an image via OpenRouter's chat-completions image API.
+     */
+    private function generateImageOpenRouter(string $model, string $prompt): string
+    {
+        $base_url = rtrim((string) ($this->key['base_url'] ?? ''), '/');
+        $url = $base_url . '/chat/completions';
+        $headers = $this->openAICompatibleHeaders();
+        $modalities = $this->openRouterImageModalities($model);
+
+        $body = [
+            'model' => $model,
+            'messages' => [[
+                'role' => 'user',
+                'content' => mb_substr($prompt, 0, 32000),
+            ]],
+            'modalities' => $modalities,
+            'stream' => false,
+        ];
+
+        $raw = $this->httpPost($url, $body, $headers);
+        $response = json_decode($raw, true);
+        if (!is_array($response)) {
+            throw new RuntimeException('Invalid JSON response from provider.');
+        }
+
+        $image_url = $response['choices'][0]['message']['images'][0]['image_url']['url']
+            ?? $response['choices'][0]['message']['images'][0]['imageUrl']['url']
+            ?? null;
+        if (!is_string($image_url) || trim($image_url) === '') {
+            $err = $response['error']['message'] ?? $response['error'] ?? mb_substr($raw, 0, 300);
+            if (is_array($err)) {
+                $err = json_encode($err);
+            }
+            throw new RuntimeException('Image generation failed: ' . $err);
+        }
+
+        return $this->decodeGeneratedImageReference($image_url);
+    }
+
     /* ------------------------------------------------------------------
      * Utilities
      * ----------------------------------------------------------------*/
@@ -960,6 +1026,38 @@ class AIProvider
     {
         $base_url = rtrim((string) ($this->key['base_url'] ?? ''), '/');
         $url = $base_url . '/models';
+        $headers = $this->openAICompatibleHeaders();
+
+        $raw = $this->httpGet($url, $headers);
+        $data = json_decode($raw, true);
+        if (!is_array($data)) {
+            throw new RuntimeException('Invalid JSON response from provider.');
+        }
+
+        $models = [];
+        foreach (($data['data'] ?? []) as $item) {
+            $id = trim((string) ($item['id'] ?? $item['name'] ?? ''));
+            if ($id !== '') {
+                $models[] = $id;
+            }
+        }
+
+        return $models;
+    }
+
+    /**
+     * List OpenRouter models filtered by output modality.
+     *
+     * @param array<int, string> $output_modalities
+     * @return array<int, string>
+     */
+    private function listOpenRouterModelsByOutput(array $output_modalities): array
+    {
+        $base_url = rtrim((string) ($this->key['base_url'] ?? ''), '/');
+        $query = http_build_query([
+            'output_modalities' => implode(',', array_values(array_filter(array_map('trim', $output_modalities)))),
+        ]);
+        $url = $base_url . '/models' . ($query !== '' ? '?' . $query : '');
         $headers = $this->openAICompatibleHeaders();
 
         $raw = $this->httpGet($url, $headers);
@@ -1134,6 +1232,61 @@ class AIProvider
         }
 
         return $response;
+    }
+
+    /**
+     * Decode a generated-image URL or data URI into binary image bytes.
+     */
+    private function decodeGeneratedImageReference(string $reference): string
+    {
+        $reference = trim($reference);
+        if ($reference === '') {
+            throw new RuntimeException('Generated image reference was empty.');
+        }
+
+        if (preg_match('#^data:image/[^;]+;base64,(.+)$#', $reference, $matches) === 1) {
+            $binary = base64_decode($matches[1], true);
+            if ($binary === false) {
+                throw new RuntimeException('Failed to decode generated image data.');
+            }
+            return $binary;
+        }
+
+        return $this->downloadRemoteBinary($reference);
+    }
+
+    /**
+     * Determine the correct OpenRouter image-generation modalities for a model.
+     *
+     * @return array<int, string>
+     */
+    private function openRouterImageModalities(string $model): array
+    {
+        $base_url = rtrim((string) ($this->key['base_url'] ?? ''), '/');
+        $url = $base_url . '/models/' . rawurlencode($model) . '/endpoints';
+        $headers = $this->openAICompatibleHeaders();
+
+        try {
+            $raw = $this->httpGet($url, $headers);
+            $data = json_decode($raw, true);
+            $modalities = $data['data']['architecture']['output_modalities'] ?? [];
+            if (is_array($modalities) && in_array('image', $modalities, true)) {
+                return in_array('text', $modalities, true) ? ['image', 'text'] : ['image'];
+            }
+        } catch (RuntimeException $e) {
+            // Fall back to image-only output if model metadata is unavailable.
+        }
+
+        return ['image'];
+    }
+
+    /**
+     * Return true when this key targets OpenRouter.
+     */
+    private function isOpenRouterHost(): bool
+    {
+        $host = strtolower((string) (parse_url((string) ($this->key['base_url'] ?? ''), PHP_URL_HOST) ?? ''));
+        return $host !== '' && str_contains($host, 'openrouter.ai');
     }
 
     /**

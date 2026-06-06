@@ -1939,12 +1939,16 @@ function handle_list_api_models(): void
     $provider_client = api_ai_provider($record, current_user());
 
     try {
-        $models = $provider_client->listModels();
+        $catalog = $provider_client->listModelCatalog();
     } catch (RuntimeException $e) {
         json_error('Failed to list models: ' . $e->getMessage(), 400);
     }
 
-    json_success(['models' => $models]);
+    json_success([
+        'models' => array_values(array_unique(array_merge($catalog['text'] ?? [], $catalog['image'] ?? []))),
+        'text_models' => $catalog['text'] ?? [],
+        'image_models' => $catalog['image'] ?? [],
+    ]);
 }
 
 /**

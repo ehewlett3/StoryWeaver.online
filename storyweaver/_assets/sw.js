@@ -1859,10 +1859,20 @@ document.addEventListener('DOMContentLoaded', function () {
             selectEl.disabled = models.length === 0;
         }
 
-        function applyFetchedModels(models) {
-            populateModelSelect(textModelSelect, models, textModelInput.value.trim());
-            populateModelSelect(imageModelSelect, models, imageModelInput.value.trim());
-            setKeyFormStatus(models.length > 0 ? 'Models loaded.' : 'No models were returned.', false);
+        function applyFetchedModels(data) {
+            var textModels = Array.isArray(data && data.text_models) ? data.text_models : (Array.isArray(data) ? data : []);
+            var imageModels = Array.isArray(data && data.image_models) ? data.image_models : (Array.isArray(data) ? data : []);
+            var allModels = Array.isArray(data && data.models) ? data.models : Array.from(new Set(textModels.concat(imageModels)));
+
+            populateModelSelect(textModelSelect, textModels.length > 0 ? textModels : allModels, textModelInput.value.trim());
+            populateModelSelect(imageModelSelect, imageModels.length > 0 ? imageModels : allModels, imageModelInput.value.trim());
+
+            if (textModels.length > 0 && imageModels.length > 0 && textModels.join('\u0000') !== imageModels.join('\u0000')) {
+                setKeyFormStatus('Text and image models loaded.', false);
+                return;
+            }
+
+            setKeyFormStatus(allModels.length > 0 ? 'Models loaded.' : 'No models were returned.', false);
         }
 
         function enterCreateMode() {
@@ -2010,7 +2020,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         setKeyFormStatus('Error: ' + (data.error || 'Model listing failed'), true);
                         return;
                     }
-                    applyFetchedModels(data.models || []);
+                    applyFetchedModels(data);
                 })
                 .catch(function (err) {
                     setKeyFormStatus('Error: ' + err.message, true);
