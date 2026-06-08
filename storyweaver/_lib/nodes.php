@@ -742,6 +742,58 @@ function story_auto_image_key_id(string $story_id): string
     return validate_id($key_id, 'key_') ? $key_id : '';
 }
 
+/**
+ * Return true when story image generation should include saved guidance.
+ */
+function story_image_guidance_enabled(string $story_id): bool
+{
+    $meta = story_root_meta($story_id);
+    return !empty($meta['image_guidance_enabled']) && trim((string) ($meta['image_guidance'] ?? '')) !== '';
+}
+
+/**
+ * Return saved story-level image generation guidance.
+ */
+function story_image_guidance(string $story_id): string
+{
+    $meta = story_root_meta($story_id);
+    return trim((string) ($meta['image_guidance'] ?? ''));
+}
+
+/**
+ * Update story-level image generation preferences.
+ */
+function story_update_image_settings(string $story_id, bool $auto_generate_images, string $image_key_id, bool $guidance_enabled, string $guidance, string $updated_by): bool
+{
+    $root_id = story_find_root($story_id);
+    if ($root_id === null) {
+        return false;
+    }
+
+    $root = node_read($story_id, $root_id, true);
+    if ($root === null) {
+        return false;
+    }
+
+    $guidance = trim($guidance);
+    if (mb_strlen($guidance, 'UTF-8') > 1200) {
+        $guidance = mb_substr($guidance, 0, 1200, 'UTF-8');
+    }
+
+    $meta = is_array($root['sw_meta'] ?? null) ? $root['sw_meta'] : [];
+    $meta['auto_generate_images'] = $auto_generate_images;
+    if ($auto_generate_images && validate_id($image_key_id, 'key_')) {
+        $meta['auto_image_key_id'] = $image_key_id;
+    } elseif (!$auto_generate_images) {
+        unset($meta['auto_image_key_id']);
+    }
+    $meta['image_guidance_enabled'] = $guidance_enabled && $guidance !== '';
+    $meta['image_guidance'] = $guidance;
+    $meta = node_meta_append_history($meta, $updated_by, 'story_image_settings_updated');
+    node_update_meta($story_id, $root_id, $meta);
+    return true;
+}
+
 /* ------------------------------------------------------------------
  * Node CRUD
  * ----------------------------------------------------------------*/

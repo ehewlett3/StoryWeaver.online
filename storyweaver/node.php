@@ -99,6 +99,9 @@ if ($is_root_node) {
         $story_scenario_essentials = trim((string) ($root_node['sw_meta']['scenario_essentials'] ?? ''));
     }
 }
+$story_auto_images_enabled = story_auto_images_enabled($story_id);
+$story_image_guidance_enabled = story_image_guidance_enabled($story_id);
+$story_image_guidance = story_image_guidance($story_id);
 $effective_theme = $story_theme !== '' ? $story_theme : theme_css();
 $editable_story_title = html_entity_decode((string) ($node['title'] ?? ''), ENT_QUOTES | ENT_HTML5, 'UTF-8');
 $can_rename_story = $user !== null
@@ -328,7 +331,25 @@ $story_shared_users = story_shared_users($story_privacy['shared_user_ids'] ?? []
                                      title="More image actions"
                                      aria-label="More image actions">▾</summary>
                             <div class="sw-inline-action-menu-panel">
-                                <label for="sw-image-upload" class="sw-inline-action-item">Upload image</label>
+                                <button type="button"
+                                        id="sw-auto-image-toggle"
+                                        class="sw-inline-action-item sw-inline-action-button"
+                                        data-story-id="<?= h($story_id) ?>"
+                                        data-enabled="<?= $story_auto_images_enabled ? '1' : '0' ?>"
+                                        data-image-key-id="<?= h(story_auto_image_key_id($story_id)) ?>"
+                                        data-available="<?= $has_image_model ? '1' : '0' ?>"
+                                        <?= $has_image_model ? '' : 'disabled' ?>>
+                                    Auto-gen Image: <?= $story_auto_images_enabled ? 'On' : 'Off' ?>
+                                </button>
+                                <button type="button"
+                                        id="sw-image-guidance-toggle"
+                                        class="sw-inline-action-item sw-inline-action-button"
+                                        data-story-id="<?= h($story_id) ?>"
+                                        data-enabled="<?= $story_image_guidance_enabled ? '1' : '0' ?>"
+                                        data-guidance="<?= h($story_image_guidance) ?>">
+                                    Image-gen Guidance: <?= $story_image_guidance_enabled ? 'On' : 'Off' ?>
+                                </button>
+                                <label for="sw-image-upload" class="sw-inline-action-item">Upload Image</label>
                             </div>
                         </details>
                         <input type="file" id="sw-image-upload" accept="image/png,image/jpeg,image/gif,image/webp"
@@ -418,7 +439,7 @@ $story_shared_users = story_shared_users($story_privacy['shared_user_ids'] ?? []
                 <div class="sw-choice-ai-row">
                     <div class="sw-ai-indicator">
                         <?php if ($ai_available): ?>
-                            <label class="sw-ai-badge" for="sw-text-key-picker">✨ Text:</label>
+                            <label class="sw-ai-badge" for="sw-text-key-picker"><span aria-hidden="true">✨</span><span class="sw-ai-label-text"> Text:</span></label>
                             <select id="sw-text-key-picker" class="sw-input sw-input-sm sw-ai-picker">
                                 <option value="human">Human — write it yourself</option>
                                 <?php foreach ($text_keys as $ak): ?>
@@ -431,7 +452,7 @@ $story_shared_users = story_shared_users($story_privacy['shared_user_ids'] ?? []
 
                         <?php if ($has_image_model): ?>
                             <?php if (count($image_keys) > 1): ?>
-                                <label class="sw-ai-badge" for="sw-image-key-picker">🖼️ Image:</label>
+                                <label class="sw-ai-badge" for="sw-image-key-picker"><span aria-hidden="true">🖼️</span><span class="sw-ai-label-text"> Image:</span></label>
                                 <select id="sw-image-key-picker" class="sw-input sw-input-sm sw-ai-picker">
                                     <?php foreach ($image_keys as $ak): ?>
                                         <option value="<?= h($ak['id']) ?>">
@@ -440,7 +461,7 @@ $story_shared_users = story_shared_users($story_privacy['shared_user_ids'] ?? []
                                     <?php endforeach; ?>
                                 </select>
                             <?php elseif (count($image_keys) === 1): ?>
-                                <span class="sw-ai-badge">🖼️ Image: <?= h($image_keys[0]['label']) ?> — <?= h($image_keys[0]['model_image']) ?></span>
+                                <span class="sw-ai-badge"><span aria-hidden="true">🖼️</span><span class="sw-ai-label-text"> Image:</span> <?= h($image_keys[0]['label']) ?> — <?= h($image_keys[0]['model_image']) ?></span>
                             <?php endif; ?>
                         <?php endif; ?>
                     </div>

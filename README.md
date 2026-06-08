@@ -14,7 +14,7 @@ The repository root intentionally stays minimal: the deployable app is the `stor
 - **Story Opening** — Provide optional opening text that becomes the first part of the root page before AI-generated text is appended
 - **Story settings row** — Root pages group Title, Guidelines, Access, Theme, and Delete controls together at the bottom of the story
 - **Real-time streaming** — Watch AI-generated text appear token by token via Server-Sent Events, with abort controls if a request stalls
-- **Image generation** — Create illustrations for story pages using DALL-E, GPT Image, Flux, or compatible image models; stories can opt into automatic pictures after AI text generation
+- **Image generation** — Create illustrations for story pages using DALL-E, GPT Image, Flux, or compatible image models; stories can opt into automatic pictures after AI text generation and save persistent image-generation guidance
 - **Image management** — Regenerate images with side-by-side comparison, delete unwanted images
 - **Multiple API keys** — Configure multiple AI providers with user-scoped or shared access
 - **Per-user AI tuning** — Logged-in users can edit their story system prompt text and generation controls, while admins manage the shared JSON schema
@@ -205,7 +205,7 @@ Logged-in story creators can set a story to **Private** from the Begin New Story
 
 Story pages and generated/uploaded story images are served through PHP controllers so privacy checks apply before content is returned. Apache `.htaccess` must be active to block direct access to raw `stories/` and `_assets/images/` files.
 
-Auto-image generation is stored as a story-level preference. When enabled and an accessible image model exists, StoryWeaver redirects to the completed page first, then starts the normal image-generation button flow so the standard progress UI is used.
+Auto-image generation is stored as a story-level preference. When enabled and an accessible image model exists, StoryWeaver redirects to the completed page first, then starts the normal image-generation button flow so the standard progress UI is used. Story editors can also use the image-action dropdown beside Generate/Regenerate Image to toggle auto-generation and save persistent image-generation guidance; saved guidance is included in future image prompts until toggled off.
 
 The root story page's **Story Settings** row groups story-wide controls. Owners/admins can manage Access and delete the entire story; editors/admins can rename story titles; story creators/admins can set per-story themes. Delete Story removes all live/quarantined story pages and generated images.
 

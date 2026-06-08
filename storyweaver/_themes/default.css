@@ -876,6 +876,28 @@ textarea.sw-theme-editor {
     color: var(--sw-color-primary);
 }
 
+.sw-inline-action-button {
+    width: 100%;
+    border: 0;
+    background: transparent;
+    font: inherit;
+    text-align: left;
+}
+
+.sw-inline-action-button:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.sw-inline-action-button:disabled:hover {
+    background: transparent;
+    color: var(--sw-color-text);
+}
+
+.sw-image-action-menu .sw-inline-action-menu-panel {
+    min-width: 13.5rem;
+}
+
 .sw-node-end-row {
     display: flex;
     align-items: center;
@@ -2537,5 +2559,32 @@ textarea.sw-theme-editor {
         left: 0;
         right: auto;
         width: calc(100vw - 2rem);
+    }
+}
+
+@media (max-width: 640px) {
+    .sw-choice-ai-row {
+        align-items: stretch;
+    }
+
+    .sw-ai-indicator {
+        flex-wrap: nowrap;
+        gap: 0.35rem;
+        width: 100%;
+        min-width: 0;
+    }
+
+    .sw-ai-badge {
+        flex: 0 0 auto;
+    }
+
+    .sw-ai-label-text {
+        display: none;
+    }
+
+    .sw-ai-picker {
+        flex: 1 1 0;
+        min-width: 0;
+        width: auto;
     }
 }

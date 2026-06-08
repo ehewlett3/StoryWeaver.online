@@ -105,9 +105,9 @@ $base = base_url();
                 <li><strong>Preview Prompts</strong> shows the exact system prompt, story context, and image prompt that would be sent.</li>
                 <li><strong>Regenerate Story</strong> creates a candidate replacement for the current page and its unlinked choices, then lets you compare the old and new versions before deciding.</li>
                 <li><strong>Generate Image</strong> and <strong>Regenerate Image</strong> create illustrations for the current page. Image regeneration lets you compare versions side by side.</li>
-                <li><strong>Auto Pictures</strong> starts the normal image-generation flow after AI text and choices finish and the new page has loaded.</li>
+                <li><strong>Auto Pictures</strong> starts the normal image-generation flow after AI text and choices finish and the new page has loaded. The image dropdown beside Generate/Regenerate Image can turn this on or off for the story.</li>
                 <li><strong>Abort</strong> appears on long-running generation overlays so you can cancel if a provider stalls instead of waiting for the full timeout.</li>
-                <li><strong>Regeneration guidance</strong> lets you add optional steering text when regenerating story text or images.</li>
+                <li><strong>Regeneration guidance</strong> lets you add optional steering text when regenerating story text or images. Image-gen Guidance in the image dropdown saves reusable image prompt guidance until toggled off.</li>
             </ul>
         </section>
 

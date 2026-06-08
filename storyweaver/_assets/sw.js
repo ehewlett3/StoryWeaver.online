@@ -167,11 +167,11 @@ document.addEventListener('DOMContentLoaded', function () {
         return getSelectedTextKeyId();
     }
 
-    function promptForOptionalGuidance(actionLabel) {
+    function promptForOptionalGuidance(actionLabel, defaultText) {
         var text = window.prompt(
             'Optional: add extra guidance for ' + actionLabel + '. Leave it blank if you want.\n\n'
-            + 'Press OK to continue, or Cancel to cancel the regeneration.',
-            ''
+            + 'Press OK to continue, or Cancel to cancel the request.',
+            defaultText || ''
         );
         if (text === null) {
             return null;
@@ -1189,6 +1189,8 @@ document.addEventListener('DOMContentLoaded', function () {
     var regenImageBtn = document.getElementById('sw-regen-image-btn');
     var uploadInput = document.getElementById('sw-image-upload');
     var imageUploadLabel = document.querySelector('label[for="sw-image-upload"]');
+    var autoImageToggle = document.getElementById('sw-auto-image-toggle');
+    var imageGuidanceToggle = document.getElementById('sw-image-guidance-toggle');
     var imageControlsHost = document.getElementById('sw-node-image-actions');
     var imageActionInsertBefore = document.getElementById('sw-image-action-menu');
     var imageUploadMenu = document.getElementById('sw-image-action-menu');
@@ -1201,7 +1203,7 @@ document.addEventListener('DOMContentLoaded', function () {
     var imageEstimateStorageKey = 'sw-image-generation-history-ms';
     var activeImageProgress = null;
 
-    [genImageBtn, regenImageBtn, uploadInput].forEach(function (el) {
+    [genImageBtn, regenImageBtn, uploadInput, autoImageToggle, imageGuidanceToggle].forEach(function (el) {
         if (!el) return;
         if (!imageActionStoryId) {
             imageActionStoryId = el.getAttribute('data-story-id') || '';
@@ -1214,6 +1216,132 @@ document.addEventListener('DOMContentLoaded', function () {
     function getCurrentNodeImageUrl() {
         var currentImage = document.querySelector('#sw-images .sw-node-image');
         return currentImage ? (currentImage.getAttribute('src') || '') : '';
+    }
+
+    function imageGuidanceIsEnabled() {
+        return !!imageGuidanceToggle && imageGuidanceToggle.getAttribute('data-enabled') === '1';
+    }
+
+    function getSavedImageGuidance() {
+        return imageGuidanceToggle ? (imageGuidanceToggle.getAttribute('data-guidance') || '').trim() : '';
+    }
+
+    function getImageGuidanceForRequest() {
+        return imageGuidanceIsEnabled() ? getSavedImageGuidance() : '';
+    }
+
+    function updateImageSettingsLabels() {
+        if (autoImageToggle) {
+            autoImageToggle.textContent = 'Auto-gen Image: ' + (autoImageToggle.getAttribute('data-enabled') === '1' ? 'On' : 'Off');
+        }
+        if (imageGuidanceToggle) {
+            imageGuidanceToggle.textContent = 'Image-gen Guidance: ' + (imageGuidanceIsEnabled() ? 'On' : 'Off');
+            var guidance = getSavedImageGuidance();
+            imageGuidanceToggle.title = guidance ? guidance : 'Add persistent guidance to image generation prompts';
+        }
+    }
+
+    function saveStoryImageSettings(nextState, onDone) {
+        if (!imageActionStoryId) return;
+        var autoEnabled = autoImageToggle ? autoImageToggle.getAttribute('data-enabled') === '1' : false;
+        var guidanceEnabled = imageGuidanceIsEnabled();
+        var guidance = getSavedImageGuidance();
+
+        if (nextState) {
+            if (Object.prototype.hasOwnProperty.call(nextState, 'auto_generate_images')) {
+                autoEnabled = !!nextState.auto_generate_images;
+            }
+            if (Object.prototype.hasOwnProperty.call(nextState, 'image_guidance_enabled')) {
+                guidanceEnabled = !!nextState.image_guidance_enabled;
+            }
+            if (Object.prototype.hasOwnProperty.call(nextState, 'image_guidance')) {
+                guidance = String(nextState.image_guidance || '').trim();
+            }
+        }
+
+        var previousAuto = autoImageToggle ? autoImageToggle.getAttribute('data-enabled') : '0';
+        var previousGuidanceEnabled = imageGuidanceToggle ? imageGuidanceToggle.getAttribute('data-enabled') : '0';
+        var previousGuidance = imageGuidanceToggle ? imageGuidanceToggle.getAttribute('data-guidance') || '' : '';
+
+        if (autoImageToggle) autoImageToggle.disabled = true;
+        if (imageGuidanceToggle) imageGuidanceToggle.disabled = true;
+
+        fetch(apiBase + '/api?action=set_story_image_settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                story_id: imageActionStoryId,
+                auto_generate_images: autoEnabled,
+                image_key_id: getSelectedImageKeyId() || '',
+                image_guidance_enabled: guidanceEnabled,
+                image_guidance: guidance,
+                _csrf_token: csrfValue
+            })
+        })
+        .then(function (res) { return res.json(); })
+        .then(function (data) {
+            if (!data.ok) {
+                throw new Error(data.error || 'Failed to update image settings.');
+            }
+            if (autoImageToggle) {
+                autoImageToggle.setAttribute('data-enabled', data.auto_generate_images ? '1' : '0');
+            }
+            if (imageGuidanceToggle) {
+                imageGuidanceToggle.setAttribute('data-enabled', data.image_guidance_enabled ? '1' : '0');
+                imageGuidanceToggle.setAttribute('data-guidance', data.image_guidance || '');
+            }
+            updateImageSettingsLabels();
+            showFlash(data.message || 'Image settings updated.', 'success');
+            if (typeof onDone === 'function') onDone(data);
+        })
+        .catch(function (err) {
+            if (autoImageToggle) autoImageToggle.setAttribute('data-enabled', previousAuto);
+            if (imageGuidanceToggle) {
+                imageGuidanceToggle.setAttribute('data-enabled', previousGuidanceEnabled);
+                imageGuidanceToggle.setAttribute('data-guidance', previousGuidance);
+            }
+            updateImageSettingsLabels();
+            showFlash(err.message || 'Failed to update image settings.', 'error');
+        })
+        .finally(function () {
+            if (autoImageToggle) autoImageToggle.disabled = autoImageToggle.getAttribute('data-available') === '0';
+            if (imageGuidanceToggle) imageGuidanceToggle.disabled = false;
+        });
+    }
+
+    updateImageSettingsLabels();
+
+    if (autoImageToggle) {
+        autoImageToggle.addEventListener('click', function () {
+            if (autoImageToggle.disabled) return;
+            var next = autoImageToggle.getAttribute('data-enabled') !== '1';
+            if (imageUploadMenu) imageUploadMenu.removeAttribute('open');
+            saveStoryImageSettings({ auto_generate_images: next });
+        });
+    }
+
+    if (imageGuidanceToggle) {
+        imageGuidanceToggle.addEventListener('click', function () {
+            if (imageGuidanceToggle.disabled) return;
+            var currentlyEnabled = imageGuidanceIsEnabled();
+            if (currentlyEnabled) {
+                if (imageUploadMenu) imageUploadMenu.removeAttribute('open');
+                saveStoryImageSettings({ image_guidance_enabled: false });
+                return;
+            }
+
+            var guidance = window.prompt('Image-generation guidance to add to future image prompts:', getSavedImageGuidance());
+            if (guidance === null) {
+                return;
+            }
+            guidance = guidance.trim();
+            if (guidance === '') {
+                showFlash('Image guidance cannot be blank when enabled.', 'error');
+                return;
+            }
+            if (imageUploadMenu) imageUploadMenu.removeAttribute('open');
+            saveStoryImageSettings({ image_guidance_enabled: true, image_guidance: guidance });
+        });
     }
 
     function readImageGenerationEstimate() {
@@ -1447,6 +1575,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     story_id: storyId,
                     node_id: nodeId,
                     key_id: keyId,
+                    steer_prompt: getImageGuidanceForRequest(),
                     _csrf_token: csrfValue
                 })
             };
@@ -1578,7 +1707,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
 
-            var steerPrompt = promptForOptionalGuidance('this image regeneration');
+            var steerPrompt = promptForOptionalGuidance('this image regeneration', getImageGuidanceForRequest());
             if (steerPrompt === null) {
                 return;
             }

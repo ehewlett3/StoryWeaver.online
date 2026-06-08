@@ -85,6 +85,9 @@ switch ($action) {
     case 'generate_image':
         handle_generate_image();
         break;
+    case 'set_story_image_settings':
+        handle_set_story_image_settings();
+        break;
     case 'flag_concern':
         handle_flag_concern();
         break;
@@ -3077,6 +3080,66 @@ function handle_revoke_story_access(): void
     json_success([
         'message' => 'Story access revoked.',
         'shared_users' => story_shared_users($shared),
+    ]);
+}
+
+/**
+ * Set story-level image generation preferences.
+ */
+function handle_set_story_image_settings(): void
+{
+    $input = get_json_input();
+    csrf_check($input['_csrf_token'] ?? '');
+
+    $user = current_user();
+    if (!$user) {
+        json_error('Login required.', 401);
+    }
+
+    $story_id = trim((string) ($input['story_id'] ?? ''));
+    if (!validate_id($story_id, 'story_')) {
+        json_error('Invalid story ID.', 400);
+    }
+
+    $root_id = story_find_root($story_id);
+    if ($root_id === null) {
+        json_error('Story not found.', 404);
+    }
+
+    $root = node_read_for_user($story_id, $root_id, $user);
+    if ($root === null) {
+        json_error('Story not found.', 404);
+    }
+
+    if (!story_user_can_edit_node($story_id, $root, $user)) {
+        json_error('You do not have permission to update image settings for this story.', 403);
+    }
+
+    $auto_generate_images = !empty($input['auto_generate_images']);
+    $image_key_id = trim((string) ($input['image_key_id'] ?? ''));
+    $image_key_id = validate_id($image_key_id, 'key_') ? $image_key_id : '';
+    if ($image_key_id !== '') {
+        $key = api_key_find_by_id($image_key_id);
+        if ($key === null || ($key['status'] ?? '') !== 'active' || empty($key['model_image'])) {
+            json_error('The selected image model is not available.', 400);
+        }
+        if (($key_error = api_key_access_error($key, $user)) !== null) {
+            json_error($key_error, 403);
+        }
+    }
+
+    $guidance = trim((string) ($input['image_guidance'] ?? ''));
+    $guidance_enabled = !empty($input['image_guidance_enabled']) && $guidance !== '';
+
+    if (!story_update_image_settings($story_id, $auto_generate_images, $image_key_id, $guidance_enabled, $guidance, (string) $user['id'])) {
+        json_error('Failed to update image settings.', 500);
+    }
+
+    json_success([
+        'message' => 'Image settings updated.',
+        'auto_generate_images' => $auto_generate_images,
+        'image_guidance_enabled' => $guidance_enabled,
+        'image_guidance' => $guidance,
     ]);
 }
 
