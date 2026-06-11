@@ -53,7 +53,7 @@ $is_quarantined = ($node['location'] === 'quarantine');
 // AI availability for this user — build separate text and image key lists
 $user_id_for_key = $user ? $user['id'] : null;
 $selected_key = api_key_select_for_user($user_id_for_key);
-$has_images = !empty(glob(sw_root() . '/_assets/images/' . $node_id . '-*'));
+$has_images = !empty(node_image_files($node_id));
 
 $all_active_keys = [];
 $text_keys = [];
@@ -295,7 +295,7 @@ $story_shared_users = story_shared_users($story_privacy['shared_user_ids'] ?? []
             <div class="sw-images" id="sw-images">
                 <?php
                 // Show existing images for this node
-                $image_glob = glob(sw_root() . '/_assets/images/' . $node_id . '-*');
+                $image_glob = node_image_files($node_id);
                 if (!empty($image_glob)) {
                     foreach ($image_glob as $img_path) {
                         $img_url = image_url($story_id, $node_id, basename($img_path));
@@ -567,7 +567,7 @@ $story_shared_users = story_shared_users($story_privacy['shared_user_ids'] ?? []
                             <textarea id="sw-story-scenario-input"
                                       class="sw-input"
                                       rows="8"
-                                      maxlength="4000"
+                                      maxlength="8000"
                                       data-story-id="<?= h($story_id) ?>"
                                       data-original-value="<?= h($story_scenario_essentials) ?>"
                                       placeholder="Add enduring story setup, tone, characters, or constraints that should stay with the story."><?= h($story_scenario_essentials) ?></textarea>

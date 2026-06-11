@@ -25,6 +25,7 @@
     --sw-color-info-bg: #0f1a2e;
     --sw-color-warning: #fbbf24;
     --sw-color-warning-bg: #2d2010;
+    --sw-choice-accordion-bg: rgba(22, 33, 62, 0.82);
 }
 
 /* Override specific elements that use hardcoded colors */

@@ -36,6 +36,7 @@
     --sw-color-info-bg: #eff6ff;
     --sw-color-warning: #d97706;
     --sw-color-warning-bg: #fffbeb;
+    --sw-choice-accordion-bg: rgba(255, 255, 255, 0.86);
 
     --sw-radius: 6px;
     --sw-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
@@ -782,7 +783,7 @@ textarea.sw-theme-editor {
     margin-bottom: 1.5rem;
     border: 1px solid var(--sw-color-border);
     border-radius: var(--sw-radius);
-    background: var(--sw-color-surface);
+    background: var(--sw-choice-accordion-bg);
 }
 
 .sw-choice-accordion summary {

@@ -26,6 +26,7 @@
     --sw-color-info-bg: rgba(54, 95, 130, 0.12);
     --sw-color-warning: #8a5b12;
     --sw-color-warning-bg: rgba(138, 91, 18, 0.12);
+    --sw-choice-accordion-bg: rgba(228, 238, 224, 0.35);
     --sw-shadow: 0 8px 22px rgba(47, 33, 18, 0.08);
     --sw-shadow-lg: 0 20px 45px rgba(27, 18, 10, 0.18);
 }
@@ -154,7 +155,7 @@ body {
 }
 
 .sw-choices li a {
-    background: rgba(78, 123, 59, 0.1);
+    background: rgba(228, 238, 224, 0.35);
     border-color: rgba(63, 107, 53, 0.2);
     color: var(--sw-color-primary);
 }

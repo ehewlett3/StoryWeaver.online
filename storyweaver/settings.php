@@ -250,6 +250,7 @@ if (($user['role'] ?? '') === 'admin') {
                         <label for="key-provider">Provider</label>
                         <select id="key-provider" class="sw-input">
                             <option value="openai">OpenAI</option>
+                            <option value="xai">xAI</option>
                             <option value="anthropic">Anthropic</option>
                             <option value="gemini">Google Gemini</option>
                             <option value="ollama">Ollama (local)</option>

@@ -3201,7 +3201,11 @@ function handle_delete_image(): void
         json_error('Image not found.');
     }
 
+    $thumb_path = dirname($real) . '/' . node_image_thumbnail_filename(basename($real));
     unlink($real);
+    if (is_file($thumb_path)) {
+        @unlink($thumb_path);
+    }
     json_success(['message' => 'Image deleted.']);
 }
 

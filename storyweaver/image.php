@@ -16,7 +16,7 @@ if (!validate_id($story_id, 'story_') || !validate_id($node_id, 'node_')) {
     exit;
 }
 
-$pattern = '/^' . preg_quote($node_id, '/') . '-\d+-[a-f0-9]{8}\.(png|jpg|jpeg|gif|webp)$/';
+$pattern = '/^' . preg_quote($node_id, '/') . '-\d+-[a-f0-9]{8}(?:-thumb)?\.(png|jpg|jpeg|gif|webp)$/';
 if ($filename === '' || preg_match($pattern, $filename) !== 1) {
     http_response_code(404);
     exit;

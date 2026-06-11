@@ -208,13 +208,14 @@ function index_story_card_snippet(array $root_node): string
  */
 function index_story_card_thumbnail_url(string $story_id, string $root_node_id): ?string
 {
-    $images = glob(sw_root() . '/_assets/images/' . $root_node_id . '-*');
+    $images = node_image_files($root_node_id);
     if (empty($images)) {
         return null;
     }
 
-    sort($images, SORT_NATURAL);
-    return image_url($story_id, $root_node_id, basename($images[0]));
+    $thumbnail = node_ensure_image_thumbnail($images[0]);
+    $image_path = $thumbnail !== null ? $thumbnail : $images[0];
+    return image_url($story_id, $root_node_id, basename($image_path));
 }
 
 /**
@@ -611,7 +612,7 @@ if (is_dir($stories_dir)) {
                 <div class="sw-form-group">
                     <label for="scenario-essentials">Story Guidelines <span class="sw-text-muted">(optional)</span></label>
                     <textarea id="scenario-essentials" name="scenario_essentials" class="sw-input"
-                              rows="6" maxlength="4000"
+                              rows="6" maxlength="8000"
                               placeholder="e.g. Medieval fantasy, the hero is a young blacksmith, dark forest setting…"></textarea>
                     <span class="sw-text-muted sw-text-sm">Help the AI set the scene. Leave blank for a surprise.</span>
                 </div>

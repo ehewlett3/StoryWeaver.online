@@ -19,6 +19,12 @@ define('STORIES_DIR', sw_root() . '/stories');
 /** Filesystem path to the quarantine directory. */
 define('QUARANTINE_DIR', sw_root() . '/quarantine');
 
+/** Story-card thumbnail width, matching the 168px desktop slot at 2x density. */
+define('STORY_CARD_THUMBNAIL_WIDTH', 336);
+
+/** Story-card thumbnail height, matching the 116px desktop slot at 2x density. */
+define('STORY_CARD_THUMBNAIL_HEIGHT', 232);
+
 /**
  * Resolve the filesystem path for a node, checking both stories and quarantine.
  *
@@ -339,6 +345,119 @@ function story_delete(string $story_id): bool
     }
 
     return true;
+}
+
+/**
+ * Return true when an image filename is a generated story-card thumbnail.
+ */
+function node_image_is_thumbnail_filename(string $filename): bool
+{
+    return preg_match('/-thumb\.jpe?g$/i', $filename) === 1;
+}
+
+/**
+ * Return non-thumbnail image paths for a node, sorted by natural filename order.
+ *
+ * @return array<int, string>
+ */
+function node_image_files(string $node_id): array
+{
+    $images = [];
+    foreach (glob(sw_root() . '/_assets/images/' . $node_id . '-*') ?: [] as $image_path) {
+        if (node_image_is_thumbnail_filename(basename($image_path))) {
+            continue;
+        }
+        $images[] = $image_path;
+    }
+    sort($images, SORT_NATURAL);
+    return $images;
+}
+
+/**
+ * Return the thumbnail filename for a full-size node image filename.
+ */
+function node_image_thumbnail_filename(string $filename): string
+{
+    $base = pathinfo($filename, PATHINFO_FILENAME);
+    return $base . '-thumb.jpg';
+}
+
+/**
+ * Ensure a story-card thumbnail exists for an image path.
+ */
+function node_ensure_image_thumbnail(string $image_path): ?string
+{
+    if (!is_file($image_path) || node_image_is_thumbnail_filename(basename($image_path))) {
+        return null;
+    }
+    if (!function_exists('imagecreatefromstring') || !function_exists('imagecreatetruecolor') || !function_exists('imagejpeg')) {
+        return null;
+    }
+
+    $images_dir = realpath(sw_root() . '/_assets/images');
+    $real = realpath($image_path);
+    if ($images_dir === false || $real === false || !str_starts_with($real, $images_dir . DIRECTORY_SEPARATOR)) {
+        return null;
+    }
+
+    $thumb_path = dirname($real) . '/' . node_image_thumbnail_filename(basename($real));
+    if (is_file($thumb_path)) {
+        return $thumb_path;
+    }
+
+    $source_data = @file_get_contents($real);
+    if ($source_data === false) {
+        return null;
+    }
+
+    $source = @imagecreatefromstring($source_data);
+    if (!$source) {
+        return null;
+    }
+
+    $source_width = imagesx($source);
+    $source_height = imagesy($source);
+    if ($source_width <= 0 || $source_height <= 0) {
+        imagedestroy($source);
+        return null;
+    }
+
+    $target_width = STORY_CARD_THUMBNAIL_WIDTH;
+    $target_height = STORY_CARD_THUMBNAIL_HEIGHT;
+    $source_ratio = $source_width / $source_height;
+    $target_ratio = $target_width / $target_height;
+
+    if ($source_ratio > $target_ratio) {
+        $crop_height = $source_height;
+        $crop_width = (int) round($source_height * $target_ratio);
+        $src_x = (int) max(0, floor(($source_width - $crop_width) / 2));
+        $src_y = 0;
+    } else {
+        $crop_width = $source_width;
+        $crop_height = (int) round($source_width / $target_ratio);
+        $src_x = 0;
+        $src_y = (int) max(0, floor(($source_height - $crop_height) / 2));
+    }
+
+    $thumb = imagecreatetruecolor($target_width, $target_height);
+    if (!$thumb) {
+        imagedestroy($source);
+        return null;
+    }
+
+    imagecopyresampled($thumb, $source, 0, 0, $src_x, $src_y, $target_width, $target_height, $crop_width, $crop_height);
+    ob_start();
+    imagejpeg($thumb, null, 84);
+    $thumb_data = ob_get_clean();
+    imagedestroy($thumb);
+    imagedestroy($source);
+
+    if (!is_string($thumb_data) || $thumb_data === '') {
+        return null;
+    }
+
+    atomic_write($thumb_path, $thumb_data);
+    return $thumb_path;
 }
 
 /**
@@ -2181,6 +2300,7 @@ function node_save_image(string $node_id, string $image_data, string $extension 
     $filepath = $images_dir . '/' . $filename;
 
     atomic_write($filepath, $image_data);
+    node_ensure_image_thumbnail($filepath);
 
     return '/_assets/images/' . $filename;
 }

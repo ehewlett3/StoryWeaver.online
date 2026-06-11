@@ -14,7 +14,7 @@ require_once __DIR__ . '/AIProvider.php';
 
 /** Maximum total characters for the assembled context string. */
 define('MAX_CONTEXT_CHARS', 12000);
-define('SCENARIO_ESSENTIALS_MAX_CHARS', 4000);
+define('SCENARIO_ESSENTIALS_MAX_CHARS', 8000);
 define('STORY_OPENING_MAX_CHARS', 6000);
 define('PROMPT_CHARS_PER_TOKEN', 4);
 define('DEFAULT_MODEL_CONTEXT_TOKENS', 32000);

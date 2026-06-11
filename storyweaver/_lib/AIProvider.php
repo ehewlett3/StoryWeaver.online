@@ -2,7 +2,7 @@
 /**
  * StoryWeaver — AI provider abstraction (§3.1).
  *
- * Normalizes text generation requests across OpenAI, Anthropic,
+ * Normalizes text generation requests across OpenAI, xAI, Anthropic,
  * Ollama, and custom OpenAI-compatible endpoints. Uses curl for
  * HTTP with proper timeout and error handling.
  */
@@ -137,11 +137,12 @@ class AIProvider
     {
         $provider = $this->key['provider'] ?? 'openai';
 
-        $open_ai_compatible_models = $this->isOpenRouterHost()
+        $open_ai_compatible_models = $this->isOpenRouterHost() || $provider === 'xai'
             ? []
             : $this->listOpenAICompatibleModels();
 
         $catalog = match ($provider) {
+            'xai'       => $this->listXAIModelCatalog(),
             'anthropic' => ['text' => $this->listAnthropicModels(), 'image' => []],
             'gemini'    => ['text' => $this->listGeminiModels(), 'image' => $this->listGeminiModels()],
             'ollama'    => ['text' => $this->listOllamaModels(), 'image' => $this->listOllamaModels()],
@@ -850,6 +851,9 @@ class AIProvider
             if ($provider === 'ollama') {
                 return $this->generateImageOllama($model, $prompt);
             }
+            if ($provider === 'xai') {
+                return $this->generateImageXAI($model, $prompt);
+            }
             if ($this->isOpenRouterHost()) {
                 return $this->generateImageOpenRouter($model, $prompt);
             }
@@ -962,6 +966,52 @@ class AIProvider
     }
 
     /**
+     * Generate image via xAI's /images/generations endpoint.
+     */
+    private function generateImageXAI(string $model, string $prompt): string
+    {
+        $base_url = rtrim((string) ($this->key['base_url'] ?? ''), '/');
+        $url = $base_url . '/images/generations';
+        $headers = $this->openAICompatibleHeaders();
+
+        $body = [
+            'model' => $model,
+            'prompt' => mb_substr($prompt, 0, 32000),
+            'n' => 1,
+            'resolution' => '1k',
+            'response_format' => 'b64_json',
+        ];
+
+        $raw = $this->httpPost($url, $body, $headers);
+        $response = json_decode($raw, true);
+        if (!is_array($response)) {
+            throw new RuntimeException('Invalid JSON response from xAI.');
+        }
+
+        $b64 = $response['data'][0]['b64_json'] ?? null;
+        if (is_string($b64) && $b64 !== '') {
+            $binary = base64_decode($b64);
+            if ($binary === false) {
+                throw new RuntimeException('Failed to decode xAI image data.');
+            }
+            return $binary;
+        }
+
+        $img_url = $response['data'][0]['url']
+            ?? $response['data'][0]['image_url']
+            ?? null;
+        if (is_string($img_url) && trim($img_url) !== '') {
+            return $this->decodeGeneratedImageReference($img_url);
+        }
+
+        $err = $response['error']['message'] ?? $response['error'] ?? mb_substr($raw, 0, 300);
+        if (is_array($err)) {
+            $err = json_encode($err);
+        }
+        throw new RuntimeException('xAI image generation failed: ' . $err);
+    }
+
+    /**
      * Generate an image via OpenRouter's chat-completions image API.
      */
     private function generateImageOpenRouter(string $model, string $prompt): string
@@ -1043,6 +1093,36 @@ class AIProvider
         }
 
         return $models;
+    }
+
+    /**
+     * List xAI models and split Grok Imagine image models from text models.
+     *
+     * @return array{text: array<int, string>, image: array<int, string>}
+     */
+    private function listXAIModelCatalog(): array
+    {
+        $models = $this->listOpenAICompatibleModels();
+        $text = [];
+        $image = [];
+
+        foreach ($models as $model) {
+            $lower = strtolower($model);
+            if (str_contains($lower, 'grok-imagine-image')) {
+                $image[] = $model;
+                continue;
+            }
+            if (str_contains($lower, 'grok-imagine-video')) {
+                continue;
+            }
+            $text[] = $model;
+        }
+
+        if (empty($image)) {
+            $image = ['grok-imagine-image', 'grok-imagine-image-quality'];
+        }
+
+        return ['text' => $text, 'image' => $image];
     }
 
     /**

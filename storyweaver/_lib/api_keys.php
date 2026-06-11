@@ -3,7 +3,7 @@
  * StoryWeaver — API key management helpers.
  *
  * CRUD for _data/api_keys.json. Each key record describes a provider
- * configuration (OpenAI, Anthropic, Ollama, custom) with model names,
+ * configuration (OpenAI, xAI, Anthropic, Ollama, custom) with model names,
  * scope, and status. Keys are selected at call time per §3.1 priority.
  */
 
@@ -766,7 +766,7 @@ function api_key_mark_unavailable(string $id, string $reason = ''): bool
  */
 function api_key_valid_provider(string $provider): bool
 {
-    return in_array($provider, ['openai', 'anthropic', 'gemini', 'ollama', 'custom'], true);
+    return in_array($provider, ['openai', 'xai', 'anthropic', 'gemini', 'ollama', 'custom'], true);
 }
 
 /**
@@ -779,6 +779,7 @@ function api_key_default_base_url(string $provider): string
 {
     return match ($provider) {
         'openai'    => 'https://api.openai.com/v1',
+        'xai'       => 'https://api.x.ai/v1',
         'anthropic' => 'https://api.anthropic.com',
         'gemini'    => 'https://generativelanguage.googleapis.com/v1beta',
         'ollama'    => 'http://localhost:11434/v1',

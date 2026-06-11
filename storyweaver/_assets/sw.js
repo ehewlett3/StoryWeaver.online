@@ -2010,6 +2010,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         var defaultUrls = {
             openai: 'https://api.openai.com/v1',
+            xai: 'https://api.x.ai/v1',
             anthropic: 'https://api.anthropic.com',
             gemini: 'https://generativelanguage.googleapis.com/v1beta',
             ollama: 'http://localhost:11434/v1',
@@ -2213,12 +2214,14 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
                 apiKeyInput.placeholder = providerInput.value === 'gemini'
                     ? 'AIza...'
-                    : 'sk-...';
+                    : (providerInput.value === 'xai' ? 'xai-...' : 'sk-...');
                 apiKeyNote.textContent = providerInput.value === 'ollama'
                     ? 'Not needed for local Ollama.'
                     : (providerInput.value === 'gemini'
                         ? 'Stored securely after you save it. Free AI Studio keys can be quota-, region-, or model-limited, so use Fetch Models to pick an available Gemini text model.'
-                        : 'Stored securely after you save it.');
+                        : (providerInput.value === 'xai'
+                            ? 'Stored securely after you save it. xAI image generation uses 1K resolution by default.'
+                            : 'Stored securely after you save it.'));
             });
         }
 

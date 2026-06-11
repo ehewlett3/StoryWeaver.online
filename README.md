@@ -33,6 +33,7 @@ The repository root intentionally stays minimal: the deployable app is the `stor
   - `json` (enabled by default)
   - `session` (enabled by default)
   - `mbstring` (recommended)
+  - `gd` (recommended for story-card thumbnails)
 - **Apache 2.4+** with `mod_rewrite` enabled (for `.htaccess` support)
 - **Writable filesystem** — PHP must be able to write to the `storyweaver/` directory tree
 
@@ -99,6 +100,7 @@ After creating your admin account, go to **⚙️ Settings → API Keys** and ad
 | Provider | Base URL | API Key | Text Model | Image Model |
 |----------|----------|---------|------------|-------------|
 | **OpenAI** | `https://api.openai.com/v1` | Your API key | `gpt-4o-mini`, `gpt-4o` | `gpt-image-1`, `dall-e-3` |
+| **xAI** | `https://api.x.ai/v1` | Your xAI API key | `grok-4`, `grok-3` | `grok-imagine-image`, `grok-imagine-image-quality` |
 | **Gemini** | `https://generativelanguage.googleapis.com/v1beta` | Your API key | `gemini-2.5-flash`, `gemini-2.0-flash` | *(none)* |
 | **Ollama** (local) | `http://localhost:11434/v1` | *(leave blank)* | `gemma3:4b`, `llama3.2` | `x/flux2-klein` |
 | **Anthropic** | `https://api.anthropic.com` | Your API key | `claude-sonnet-4-20250514` | *(none)* |
@@ -187,7 +189,7 @@ All data is stored as files on disk — there is no database:
 
 - **Users, keys, settings**: JSON files in `_data/`
 - **Story pages**: Self-contained HTML files in `stories/{story_id}/`
-- **Images**: PNG/JPEG/WebP files in `_assets/images/`
+- **Images**: PNG/JPEG/WebP files in `_assets/images/`; story-card thumbnails are generated beside originals as `*-thumb.jpg`
 - **All writes are atomic**: content is written to a `.tmp` file with `LOCK_EX`, then atomically `rename()`d into place, preventing corruption from crashes or concurrent access
 
 ### Story Nodes
@@ -218,7 +220,7 @@ Admins can maintain the current homepage announcement from the story index. The 
 The `AIProvider` class normalizes requests across providers:
 - **Text generation**: Streaming via SSE (Server-Sent Events) with real-time token display
 - **Abort controls**: Long-running generation requests can be cancelled from the live overlay instead of waiting for the full timeout
-- **Image generation**: Supports OpenAI image API and Ollama's native generation endpoint
+- **Image generation**: Supports OpenAI and xAI image APIs plus Ollama's native generation endpoint; xAI image requests use 1K resolution by default
 - **Context reconstruction**: Walks the parent chain to build conversation history, auto-truncates to stay within token limits
 - **Prompt engineering**: Structured prompts that return JSON with paragraphs and choices, with user-editable prompt text and a separately managed shared schema
 
